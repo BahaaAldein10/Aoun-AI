@@ -1,0 +1,160 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  accounts       Account[]
+  sessions       Session[]
+  bots           Bot[]
+  subscriptions  Subscription[]
+  files          UploadedFile[]
+  knowledgeBases KnowledgeBase[]
+}
+
+model Account {
+  id                String  @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String  @db.ObjectId
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionToken String   @unique
+  userId       String   @db.ObjectId
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Bot {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String   @db.ObjectId
+  name            String
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  websiteEnabled  Boolean  @default(false)
+  whatsappEnabled Boolean  @default(false)
+  facebookEnabled Boolean  @default(false)
+  voipEnabled     Boolean  @default(false)
+
+  embedCode       String?
+  knowledgeBaseId String?  @db.ObjectId
+
+  user            User           @relation(fields: [userId], references: [id])
+  knowledgeBase   KnowledgeBase? @relation(fields: [knowledgeBaseId], references: [id])
+  analytics       Analytics[]
+
+  @@index([userId])
+}
+
+model Subscription {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId             String   @db.ObjectId
+  stripeId           String   @unique
+  stripePriceId      String
+  stripeCustomerId   String
+  status             String
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model KnowledgeBase {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  sourceUrl      String?
+  sourceFileId   String?  @db.ObjectId
+  createdAt      DateTime @default(now())
+  deletedAt      DateTime?
+
+  user           User          @relation(fields: [userId], references: [id])
+  sourceFile     UploadedFile? @relation(fields: [sourceFileId], references: [id])
+  embeddings     Embedding[]
+  bots           Bot[]
+
+  @@index([userId])
+}
+
+model Embedding {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  knowledgeBaseId String   @db.ObjectId
+  vectorId        String
+  content         String
+  createdAt       DateTime @default(now())
+
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id])
+}
+
+model UploadedFile {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  fileName       String
+  fileUrl        String
+  fileSize       Int
+  uploadedAt     DateTime @default(now())
+  deletedAt      DateTime?
+
+  user           User             @relation(fields: [userId], references: [id])
+  knowledgeBases KnowledgeBase[]
+}
+
+model Analytics {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  botId         String   @db.ObjectId
+  date          DateTime @default(now())
+  interactions  Int      @default(0)
+  voiceCalls    Int      @default(0)
+  whatsappChats Int      @default(0)
+  facebookChats Int      @default(0)
+
+  bot Bot @relation(fields: [botId], references: [id])
+
+  @@index([botId])
+}
+
+model WebhookLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  type       String
+  payload    Json
+  statusCode Int?
+  source     String? // Stripe / WhatsApp / FB etc.
+  receivedAt DateTime @default(now())
+}
