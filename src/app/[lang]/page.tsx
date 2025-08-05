@@ -1,15 +1,25 @@
-"use client";
-
 import FeaturesSection from "@/components/layout/FeaturesSection";
 import HeroSection from "@/components/layout/HeroSection";
 import HowItWorksSection from "@/components/layout/HowItWorksSection";
 import TestimonialsSection from "@/components/layout/TestimonialsSection";
-import { useDictionary } from "@/contexts/dictionary-context";
-import { useParams } from "next/navigation";
+import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
+import type { Metadata } from "next";
 
-export default function HomePage() {
-  const { lang } = useParams<{ lang: string }>();
-  const dict = useDictionary();
+type Props = {
+  params: Promise<{ lang: SupportedLang }>;
+};
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { dict } = await getLangAndDict(params);
+  const t = dict.seo.home;
+  return {
+    title: t.title,
+    description: t.description,
+  };
+}
+
+export default async function HomePage({ params }: Props) {
+  const { lang, dict } = await getLangAndDict(params);
   const t = dict.home;
 
   return (
@@ -19,6 +29,5 @@ export default function HomePage() {
       <HowItWorksSection lang={lang} t={t} />
       <TestimonialsSection t={t} />
     </main>
-    // <ChatWidget isFloating />
   );
 }

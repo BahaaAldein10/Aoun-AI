@@ -1,5 +1,3 @@
-"use client";
-
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -8,17 +6,20 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { useDictionary } from "@/contexts/dictionary-context";
+import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { LogIn, Menu } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { Icons } from "../shared/Icons";
 import { LanguageSwitcher } from "../shared/LanguageSwitcher";
 
-const Header = () => {
-  const { lang } = useParams<{ lang: string }>();
-  const dict = useDictionary();
+const Header = async ({
+  params,
+}: {
+  params: Promise<{ lang: SupportedLang }>;
+}) => {
+  const { lang } = await params;
+  const dict = await getDictionary(lang);
   const t = dict.header;
 
   const navLinks = [

@@ -61,50 +61,68 @@
     "bots": "agents",
     "cta": "Choose Plan",
     "cta_free": "Try Now for Free",
-    "cta_contact_sales": "Contact Sales"
-  },
-  "plans": {
-    "free": {
-      "name": "Start for Free",
-      "description": "For new users to try the tools and get to know the platform without commitment.",
-      "features": [
-        "3 daily uses",
-        "Limited tools",
-        "No direct support",
-        "Watermark on results",
-        "No credit card required"
-      ]
-    },
-    "starter": {
-      "name": "Starter",
-      "description": "Perfect for small businesses and individuals ready to fully automate their interactions.",
-      "features": [
-        "Everything in Free, plus:",
-        "Advanced analytics",
-        "Community support",
-        "No watermark"
-      ]
-    },
-    "pro": {
-      "name": "Pro",
-      "description": "For growing businesses that need advanced features and full support to scale up.",
-      "features": [
-        "Everything in Starter, plus:",
-        "Email & chat support",
-        "Full API Access",
-        "Voice Cloning (beta)"
-      ]
-    },
-    "enterprise": {
-      "name": "Enterprise",
-      "description": "A tailored solution for large organizations requiring custom integrations and dedicated support.",
-      "features": [
-        "Everything in Pro, plus:",
-        "Unlimited agents & minutes",
-        "Custom integrations",
-        "Dedicated support manager",
-        "On-premise option"
-      ]
+    "cta_contact_sales": "Contact Sales",
+    "plans": {
+      "free": {
+        "name": "Start for Free",
+        "description": "For new users to explore the tools and get familiar with the platform without commitment.",
+        "price": "$0",
+        "popular": false,
+        "features": [
+          "30 min/month",
+          "1 agent",
+          "3 daily uses",
+          "Limited tools",
+          "No direct support",
+          "Watermark on results",
+          "No credit card required"
+        ]
+      },
+      "starter": {
+        "name": "Starter",
+        "description": "Ideal for small businesses and individuals ready to fully automate their interactions.",
+        "price": "$19 / month",
+        "popular": false,
+        "features": [
+          "500 min/month",
+          "2 agents",
+          "Everything in Free, plus:",
+          "Advanced analytics",
+          "Community support",
+          "No watermark",
+          "Overage: $0.05/min"
+        ]
+      },
+      "pro": {
+        "name": "Pro",
+        "description": "For growing companies needing advanced features and full support to scale.",
+        "price": "$49 / month",
+        "popular": true,
+        "features": [
+          "2,000 min/month",
+          "5 agents",
+          "Everything in Starter, plus:",
+          "Email & chat support",
+          "Full API Access",
+          "Voice Cloning (beta)",
+          "Overage: $0.03/min"
+        ]
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "description": "Custom solution for large enterprises requiring integrations and dedicated support.",
+        "price": "Custom",
+        "popular": false,
+        "features": [
+          "10,000 min/month",
+          "50 agents",
+          "Everything in Pro, plus:",
+          "Unlimited agents & minutes",
+          "Custom integrations",
+          "Dedicated support manager",
+          "On-premise option"
+        ]
+      }
     }
   },
   "footer": {
@@ -121,8 +139,8 @@
     "linkPrivacy": "Privacy Policy",
     "contactTitle": "Contact Us",
     "contactEmail": "support@aoun.ai",
-    "contactPhone": "+1 (555) 123-4567",
-    "contactAddress": "San Francisco, CA",
+    "contactPhone": "+962795700999",
+    "contactAddress": "Riyadh, Kingdom of Saudi Arabia",
     "copyright": "Aoun, Inc. All rights reserved.",
     "social": {
       "facebook": "https://facebook.com",
@@ -644,6 +662,40 @@
     "privacy": {
       "title": "Privacy Policy | Aoun",
       "description": "Review the Aoun Privacy Policy to understand how we collect, use, and protect your data when you use our AI voice agents."
+    },
+    "blog": {
+      "title": "Aoun Blog",
+      "description": "Articles and tips on AI, customer service, and business growth."
     }
+  },
+  "blog": {
+    "title": "Aoun Blog",
+    "subtitle": "Articles and insights on the future of customer service, AI, and business technology.",
+    "featured_post": "Featured Post",
+    "read_more": "Read More",
+    "back_to_blog": "Back to Blog",
+    "no_posts_title": "No blog posts yet",
+    "no_posts_description": "Please check back later for new content."
+  },
+  "admin_blog": {
+    "title": "Blog Management",
+    "description": "Create, edit, and delete blog posts.",
+    "new_post_button": "New Post",
+    "posts_table_title": "All Posts",
+    "posts_table_desc": "A list of all current blog posts.",
+    "th_title": "Title",
+    "th_status": "Status",
+    "th_date": "Date",
+    "status_published": "Published",
+    "actions_label": "Actions",
+    "edit_action": "Edit",
+    "view_action": "View",
+    "delete_action": "Delete"
+  },
+  "notFound": {
+    "title": "404 - Page Not Found",
+    "description": "Sorry, the page you are looking for does not exist.",
+    "goHome": "Go to Home",
+    "contactSupport": "Contact Support"
   }
 }

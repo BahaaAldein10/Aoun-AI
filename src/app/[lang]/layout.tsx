@@ -1,6 +1,7 @@
 import Footer from "@/components/layout/Footer";
 import Header from "@/components/layout/Header";
 import { DictionaryProvider } from "@/contexts/dictionary-context";
+import { SupportedLang } from "@/lib/dictionaries";
 import { ReactNode } from "react";
 
 export default async function LangLayout({
@@ -8,19 +9,19 @@ export default async function LangLayout({
   params,
 }: {
   children: ReactNode;
-  params: Promise<{ lang: string }>;
+  params: Promise<{ lang: SupportedLang }>;
 }) {
   const { lang } = await params;
 
   return (
-    <DictionaryProvider lang={lang as "en" | "ar"}>
+    <DictionaryProvider lang={lang as SupportedLang}>
       <div
         dir={lang === "ar" ? "rtl" : "ltr"}
         className="flex min-h-screen flex-col"
       >
-        <Header />
+        <Header params={params} />
         {children}
-        <Footer />
+        <Footer params={params} />
       </div>
     </DictionaryProvider>
   );

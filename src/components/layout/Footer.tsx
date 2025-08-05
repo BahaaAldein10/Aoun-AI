@@ -1,14 +1,15 @@
-"use client";
-
-import { useDictionary } from "@/contexts/dictionary-context";
+import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { Mail, MapPin, Phone } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { Icons } from "../shared/Icons";
 
-const Footer = () => {
-  const { lang } = useParams<{ lang: string }>();
-  const dict = useDictionary();
+const Footer = async ({
+  params,
+}: {
+  params: Promise<{ lang: SupportedLang }>;
+}) => {
+  const { lang } = await params;
+  const dict = await getDictionary(lang);
   const t = dict.footer;
 
   const quickLinks = [
