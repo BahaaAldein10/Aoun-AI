@@ -1,5 +1,3 @@
-import Footer from "@/components/layout/Footer";
-import Header from "@/components/layout/Header";
 import { DictionaryProvider } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
 import { ReactNode } from "react";
@@ -19,9 +17,7 @@ export default async function LangLayout({
         dir={lang === "ar" ? "rtl" : "ltr"}
         className="flex min-h-screen flex-col"
       >
-        <Header params={params} />
         {children}
-        <Footer params={params} />
       </div>
     </DictionaryProvider>
   );

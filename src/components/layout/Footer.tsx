@@ -32,13 +32,13 @@ const Footer = async ({
           <div className="space-y-4 rtl:text-right">
             <Link
               href={`/${lang}`}
-              className="flex w-fit items-center space-x-2 rtl:space-x-reverse"
+              className="flex w-fit items-center gap-2 rtl:space-x-reverse"
             >
               <Icons.Logo className="text-primary h-7 w-7" />
               <span className="text-xl font-bold">{t.aboutTitle}</span>
             </Link>
             <p className="text-muted-foreground text-sm">{t.aboutText}</p>
-            <div className="flex space-x-4 rtl:space-x-reverse">
+            <div className="flex gap-4 rtl:space-x-reverse">
               {t.social?.facebook && (
                 <Link
                   key="facebook"
@@ -132,7 +132,7 @@ const Footer = async ({
           <p className="text-muted-foreground">
             &copy; {new Date().getFullYear()} {t.copyright}
           </p>
-          <div className="mt-4 flex space-x-4 sm:mt-0 rtl:space-x-reverse">
+          <div className="mt-4 flex gap-4 sm:mt-0 rtl:space-x-reverse">
             <Link
               key="terms"
               href={`/${lang}/terms`}

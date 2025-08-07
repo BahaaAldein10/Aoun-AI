@@ -71,7 +71,7 @@ const PricingPage = async ({ params }: Props) => {
                     {plan.features.map((feature) => (
                       <li
                         key={feature}
-                        className="flex items-center space-x-2 rtl:space-x-reverse"
+                        className="flex items-center gap-2 rtl:space-x-reverse"
                       >
                         <Check className="h-4 w-4" />
                         <span>{feature}</span>
@@ -116,7 +116,7 @@ const PricingPage = async ({ params }: Props) => {
                     {enterprise.features.map((feature) => (
                       <li
                         key={feature}
-                        className="flex items-center space-x-2 rtl:space-x-reverse"
+                        className="flex items-center gap-2 rtl:space-x-reverse"
                       >
                         <Check className="h-4 w-4" />
                         <span>{feature}</span>

@@ -13,8 +13,8 @@ import { usePathname } from "next/navigation";
 
 export function LanguageSwitcher() {
   const pathname = usePathname();
+  const lang = pathname.split("/")[1];
 
-  // replace /en → /ar
   const getNewPath = (newLang: string) => {
     const segments = pathname.split("/");
     segments[1] = newLang;
@@ -29,7 +29,7 @@ export function LanguageSwitcher() {
           <span className="sr-only">Change language</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align={lang === "ar" ? "start" : "end"}>
         <DropdownMenuItem asChild className="cursor-pointer">
           <Link href={getNewPath("en")}>English</Link>
         </DropdownMenuItem>

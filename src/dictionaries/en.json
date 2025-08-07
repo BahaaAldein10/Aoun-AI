@@ -8,7 +8,8 @@
     "howItWorks": "How It Works",
     "dashboard": "Dashboard",
     "login": "Login",
-    "getStarted": "Sign Up"
+    "getStarted": "Sign Up",
+    "signOut": "Sign Out"
   },
   "home": {
     "title": "Never Miss a Customer Again. Your 24/7 AI Agent.",
@@ -163,10 +164,26 @@
     "name": "Full Name",
     "name_placeholder": "e.g. John Doe",
     "signup_button": "Create Account",
+    "signing_up_button": "Signing up...",
     "have_account": "Already have an account?",
     "login_link": "Login",
     "back_to_home": "Back to homepage",
-    "or_continue_with": "Or continue with"
+    "or_continue_with": "Or continue with",
+    "validation": {
+      "email": "Please enter a valid email address",
+      "passwordMin": "Password must be at least 6 characters long",
+      "passwordMax": "Password must not exceed 100 characters",
+      "passwordUpper": "Password must contain at least one uppercase letter",
+      "passwordLower": "Password must contain at least one lowercase letter",
+      "passwordNumber": "Password must contain at least one number",
+      "nameMin": "Name must be at least 2 characters long",
+      "nameMax": "Name must not exceed 50 characters",
+      "no_account": "No account found with that email",
+      "invalid_password": "Incorrect password",
+      "email_in_use": "Email already in use",
+      "internal_error": "Internal server error",
+      "auth_error": "An unexpected error occurred. Please try again."
+    }
   },
   "dashboard_layout": {
     "dashboard": "Dashboard",

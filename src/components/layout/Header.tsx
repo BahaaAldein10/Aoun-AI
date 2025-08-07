@@ -6,12 +6,14 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { auth } from "@/lib/auth";
 import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { LogIn, Menu } from "lucide-react";
 import Link from "next/link";
 import { Icons } from "../shared/Icons";
 import { LanguageSwitcher } from "../shared/LanguageSwitcher";
+import ProfileMenu from "../shared/ProfileMenu";
 
 const Header = async ({
   params,
@@ -21,6 +23,9 @@ const Header = async ({
   const { lang } = await params;
   const dict = await getDictionary(lang);
   const t = dict.header;
+
+  const session = await auth();
+  const user = session?.user;
 
   const navLinks = [
     { href: `/${lang}`, text: t.home },
@@ -32,27 +37,24 @@ const Header = async ({
 
   return (
     <header className="bg-background/80 sticky top-0 z-50 w-full border-b backdrop-blur">
-      <div className="container flex h-14 max-w-screen-2xl items-center justify-between">
-        <div className="md:hidden">
-          <LanguageSwitcher />
-        </div>
-
-        {/* Left: Logo & Nav */}
+      <div className="container flex h-16 max-w-screen-2xl items-center justify-between">
+        {/* Left: Logo + Nav */}
         <div className="flex items-center gap-6">
           <Link
             href={`/${lang}`}
             className="flex items-center gap-2 rtl:text-right"
           >
             <Icons.Logo className="text-primary h-6 w-6" />
-            <span className="font-bold">{t.title}</span>
+            <span className="text-lg font-bold">{t.title}</span>
           </Link>
 
+          {/* Desktop Nav */}
           <nav className="hidden items-center gap-6 text-sm md:flex">
             {navLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
-                className="hover:text-foreground text-foreground/70 transition-colors"
+                className="text-muted-foreground hover:text-foreground w-fit transition-colors"
               >
                 {link.text}
               </Link>
@@ -60,26 +62,33 @@ const Header = async ({
           </nav>
         </div>
 
-        {/* Right: Actions */}
-        <div className="hidden items-center gap-2 md:flex">
+        {/* Right: Language + User Actions */}
+        <div className="hidden items-center gap-3 md:flex">
           <LanguageSwitcher />
 
-          <Button variant="outline" asChild>
-            <Link href={`/${lang}/auth/login`}>
-              {t.login}
-              <LogIn className="ml-2 rtl:mr-2 rtl:ml-0" />
-            </Link>
-          </Button>
-          <Button asChild>
-            <Link href={`/${lang}/auth/signup`}>{t.getStarted}</Link>
-          </Button>
+          {user ? (
+            <ProfileMenu user={user} t={t} lang={lang} />
+          ) : (
+            <>
+              <Button variant="ghost" asChild>
+                <Link href={`/${lang}/auth/login`}>
+                  {t.login}
+                  <LogIn className="ml-2 h-4 w-4 rtl:mr-2 rtl:ml-0" />
+                </Link>
+              </Button>
+              <Button asChild>
+                <Link href={`/${lang}/auth/signup`}>{t.getStarted}</Link>
+              </Button>
+            </>
+          )}
         </div>
 
-        {/* Mobile: Menu */}
+        {/* Mobile: Menu Button */}
         <div className="flex items-center gap-2 md:hidden">
+          <LanguageSwitcher />
           <Sheet>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="cursor-pointer">
+            <SheetTrigger asChild className="cursor-pointer">
+              <Button variant="ghost" size="icon">
                 <Menu className="size-5" />
                 <span className="sr-only">Toggle Menu</span>
               </Button>
@@ -89,10 +98,9 @@ const Header = async ({
               <SheetHeader>
                 <SheetTitle>
                   <VisuallyHidden>
-                    {t.title} {lang === "ar" ? "قائمة" : "Menu"}
+                    {t.title} {lang === "ar" ? "قائمة" : "Menu"}
                   </VisuallyHidden>
                 </SheetTitle>
-
                 <div
                   className="flex w-full items-center gap-2"
                   dir={lang === "ar" ? "rtl" : "ltr"}
@@ -107,35 +115,47 @@ const Header = async ({
                 </div>
               </SheetHeader>
 
+              {/* Nav Links */}
               <div
-                className="mt-4 flex flex-col gap-4 px-2"
+                className="mt-4 flex flex-col gap-4 border-t px-4 pt-4"
                 dir={lang === "ar" ? "rtl" : "ltr"}
               >
                 {navLinks.map((link) => (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="hover:text-foreground text-foreground/70 px-2 transition-colors"
+                    className="text-muted-foreground w-fit hover:text-foreground px-2 transition-colors"
                   >
                     {link.text}
                   </Link>
                 ))}
               </div>
 
-              <div className="mt-4 flex flex-col gap-4 px-4">
-                <Button
-                  variant="outline"
-                  asChild
-                  className={lang === "ar" ? "flex-row-reverse" : ""}
-                >
-                  <Link href={`/${lang}/auth/login`}>
-                    {t.login}
-                    <LogIn className="ml-2 rtl:mr-2 rtl:ml-0" />
-                  </Link>
-                </Button>
-                <Button asChild>
-                  <Link href={`/${lang}/auth/signup`}>{t.getStarted}</Link>
-                </Button>
+              {/* Auth / Profile Actions */}
+              <div className="mt-6 flex flex-col gap-3 border-t px-4 pt-4">
+                {user ? (
+                  <Button variant="outline" asChild className="w-full">
+                    <Link href={`/${lang}/dashboard`}>{t.dashboard}</Link>
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      asChild
+                      className={`w-full ${
+                        lang === "ar" ? "flex-row-reverse" : ""
+                      }`}
+                    >
+                      <Link href={`/${lang}/auth/login`}>
+                        {t.login}
+                        <LogIn className="ml-2 h-4 w-4 rtl:mr-2 rtl:ml-0" />
+                      </Link>
+                    </Button>
+                    <Button asChild className="w-full">
+                      <Link href={`/${lang}/auth/signup`}>{t.getStarted}</Link>
+                    </Button>
+                  </>
+                )}
               </div>
             </SheetContent>
           </Sheet>
