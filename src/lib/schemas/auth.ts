@@ -1,7 +1,5 @@
-import en from "@/dictionaries/en.json";
+import { Dictionary } from "@/contexts/dictionary-context";
 import z from "zod";
-
-type Dictionary = typeof en;
 
 export const loginSchema = (dict: Dictionary) =>
   z.object({
@@ -21,6 +19,7 @@ export const signupSchema = (dict: Dictionary) =>
   z.object({
     name: z
       .string()
+      .trim()
       .min(2, { message: dict.auth.validation.nameMin })
       .max(50, { message: dict.auth.validation.nameMax }),
     email: z.email({ message: dict.auth.validation.email }),

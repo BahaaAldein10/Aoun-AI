@@ -201,7 +201,9 @@
   },
   "dashboard_home": {
     "title": "Dashboard",
+    "overview_summary": "Quick summary of key metrics",
     "total_interactions": "Total Interactions",
+    "interactions": "Interactions",
     "from_last_month": "from last month",
     "active_bots": "Active Agents",
     "plan": "Plan",
@@ -210,14 +212,28 @@
     "from_last_week": "from last week",
     "interactions_overview": "Interactions Overview",
     "interactions_last_7_days": "Total interactions over the last 7 days.",
+    "monthly_usage": "Monthly Usage",
+    "minutes": "mins",
+    "usage_warning": "You have used 80% or more of your monthly voice quota.",
+    "channel_breakdown": "Channel Breakdown",
+    "channel_breakdown_desc": "Breakdown of interactions per channel.",
+    "website": "Website",
+    "whatsapp": "WhatsApp",
+    "facebook": "Facebook",
+    "voice": "Voice",
     "sentiment_analysis": "Sentiment Analysis",
     "sentiment_description": "Customer sentiment from recent interactions.",
     "positive": "Positive",
     "neutral": "Neutral",
     "negative": "Negative",
-    "monthly_usage": "Monthly Usage",
-    "minutes": "mins",
-    "usage_warning": "You have used 80% or more of your monthly voice quota."
+    "empty_title": "No activity yet",
+    "empty_description": "You don't have any usage yet. Follow the steps below to get started.",
+    "empty_step_create_bot": "Create your first bot",
+    "empty_step_upload_docs": "Upload a PDF or point to a website to build a KB",
+    "empty_step_connect_channel": "Connect a channel (Website, WhatsApp, or Voice)",
+    "cta_create_bot": "Create bot",
+    "cta_upload_docs": "Upload docs",
+    "cta_docs": "Getting started"
   },
   "dashboard_reports": {
     "title": "Reports",
@@ -239,9 +255,14 @@
     "user_profile": "User Profile",
     "user_profile_desc": "Manage your account details.",
     "change_avatar": "Change Avatar",
+    "avatar_upload_success": "Avatar uploaded successfully!",
+    "avatar_help": "Recommended size: 200×200px. JPEG or PNG.",
     "name": "Name",
     "email": "Email",
     "save_profile": "Save Profile",
+    "saving_button": "Saving...",
+    "toast_success_title": "Profile updated successfully",
+    "toast_error_title": "Profile update failed",
     "appearance": "Appearance",
     "appearance_desc": "Customize the look and feel of the application.",
     "theme": "Theme",
@@ -251,7 +272,9 @@
     "select_language": "Select language",
     "english": "English",
     "arabic": "العربية (Arabic)",
-    "save_preferences": "Save Preferences"
+    "save_preferences": "Save Preferences",
+    "save_preferences_title": "Preferences saved",
+    "save_preferences_desc": "Appearance settings applied."
   },
   "dashboard_setup": {
     "title": "Configure Your AI Agent",
@@ -273,6 +296,7 @@
     "upload_button": "Upload Documents",
     "uploading_button": "Uploading...",
     "success_alert_title": "Success",
+    "success_alert_desc": "Knowledge base saved locally (demo).",
     "error_alert_title": "Error",
     "url_required_error": "Please enter a URL.",
     "knowledge_base_title": "Current Knowledge Base",
@@ -301,7 +325,8 @@
     "question_placeholder": "e.g., What are your business hours?",
     "answer_label": "Answer",
     "answer_placeholder": "e.g., We are open from 9 AM to 5 PM, Sunday to Thursday.",
-    "add_qa_button": "Add Another Q&A"
+    "add_qa_button": "Add Another Q&A",
+    "remove_qa_button": "Remove"
   },
   "dashboard_knowledge_base": {
     "title": "Knowledge Base",
@@ -309,6 +334,7 @@
     "no_kb_title": "No Knowledge Base Found",
     "no_kb_desc": "You haven't generated a knowledge base yet. Go to the setup page to create one.",
     "no_kb_button": "Go to Setup",
+    "update_button": "Update Knowledge Base",
     "bot_profile_title": "Agent Profile",
     "bot_name": "Name",
     "bot_personality": "Personality",
@@ -323,7 +349,19 @@
     "faq_title": "FAQ",
     "raw_json_title": "Raw JSON Data",
     "raw_json_desc": "This is the structured data that has been generated for your agent.",
-    "update_button": "Update Knowledge Base"
+    "created_at_label": "Created",
+    "delete_kb": "Delete KB",
+    "delete_kb_confirm": "Are you sure you want to delete the local knowledge base? This cannot be undone.",
+    "delete_kb_success": "Knowledge base deleted",
+    "delete_kb_error": "Failed to delete knowledge base",
+    "copy_json": "Copy JSON",
+    "copy_json_success": "Copied JSON to clipboard",
+    "copy_json_error": "Failed to copy JSON",
+    "download_json": "Download JSON",
+    "download_json_success": "Downloaded JSON",
+    "download_json_error": "Failed to download JSON",
+    "success_alert_title": "Saved",
+    "success_alert_desc": "A local copy of your knowledge base is available in the browser."
   },
   "dashboard_deploy": {
     "title_embed": "Deploy Your Agent",
@@ -340,16 +378,20 @@
     "instructions_title": "Instructions",
     "instructions_step1": "Copy the HTML snippet above.",
     "instructions_step2": "Paste it into the <body> tag of your website.",
-    "instructions_step3": "Replace 'YOUR_KB_ID' with your knowledge base's unique ID (coming soon).",
+    "instructions_step3": "Replace 'YOUR_KB_ID' with your knowledge base's unique ID.",
     "toast_success_title": "Copied!",
     "toast_success_desc": "The {type} has been copied to your clipboard.",
     "toast_error_title": "Copy Failed",
     "toast_error_desc": "We could not copy the text. Please copy it manually.",
     "api_endpoint_title": "Voice API Endpoint",
     "swift_example_title": "Swift (iOS) Example",
+    "swift_example_code": "let url = URL(string: \"https://your-domain.com/api/call\")!\nvar request = URLRequest(url: url)\nrequest.httpMethod = \"POST\"\n// Add your headers and body here\nlet task = URLSession.shared.dataTask(with: request) { data, response, error in\n    if let error = error {\n        print(\"Error: \\(error)\")\n        return\n    }\n    // Handle response\n}\ntask.resume()",
     "kotlin_example_title": "Kotlin (Android) Example",
+    "kotlin_example_code": "val url = \"https://your-domain.com/api/call\"\nval client = OkHttpClient()\nval body = RequestBody.create(null, byteArrayOf())\nval request = Request.Builder()\n    .url(url)\n    .post(body)\n    .build()\n\nclient.newCall(request).enqueue(object : Callback {\n    override fun onFailure(call: Call, e: IOException) {\n        println(\"Error: ${e.message}\")\n    }\n    override fun onResponse(call: Call, response: Response) {\n        println(response.body?.string())\n    }\n})",
     "messaging_webhook_title": "Messaging Webhook Configuration",
-    "messaging_webhook_desc": "Use this URL when configuring webhooks for WhatsApp or Messenger in the Meta Developer Portal. You will also need the Verify Token from the Admin Settings page."
+    "messaging_webhook_desc": "Use this URL when configuring webhooks for WhatsApp or Messenger in the Meta Developer Portal. You will also need the Verify Token from the Admin Settings page.",
+    "loading_placeholder": "Loading...",
+    "example_placeholder": "// Example code will appear here."
   },
   "dashboard_integrations": {
     "title": "Connected Apps",
@@ -380,13 +422,25 @@
   "dashboard_leads": {
     "title": "Leads",
     "description": "View and manage the leads captured by your AI agents.",
+    "subtitle": "Manage captured leads and export or forward them to your CRM.",
     "table_title": "Captured Leads",
+    "captured_leads": "Captured Leads",
     "table_description": "A list of all leads your agents have interacted with.",
     "download_csv": "Download CSV",
     "connect_crm": "Connect CRM",
+    "connect_crm_placeholder": "Open Connect CRM modal (implement later)",
+    "search_placeholder": "Search name, email or phone",
+    "filter_all": "All",
+    "filter_new": "New",
+    "filter_contacted": "Contacted",
+    "filter_qualified": "Qualified",
+    "filter_converted": "Converted",
+    "filter_lost": "Lost",
+    "empty": "No leads yet",
     "th_name": "Name",
     "th_contact": "Contact",
     "th_status": "Status",
+    "th_source": "Source",
     "th_captured_at": "Captured At"
   },
   "admin_layout": {
@@ -683,6 +737,10 @@
     "blog": {
       "title": "Aoun Blog",
       "description": "Articles and tips on AI, customer service, and business growth."
+    },
+    "dashboard": {
+      "title": "Dashboard | Aoun",
+      "description": "Manage your AI voice agents, track analytics, and optimize customer engagement from your Aoun dashboard."
     }
   },
   "blog": {

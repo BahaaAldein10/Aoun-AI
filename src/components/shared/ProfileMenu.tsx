@@ -3,7 +3,6 @@
 import { SupportedLang } from "@/lib/dictionaries";
 import { User } from "next-auth";
 import { signOut } from "next-auth/react";
-import Image from "next/image";
 import Link from "next/link";
 import {
   DropdownMenu,
@@ -11,6 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { Avatar, AvatarImage } from "../ui/avatar";
 
 interface ProfileMenuProps {
   user: User;
@@ -25,13 +25,12 @@ const ProfileMenu = ({ user, t, lang }: ProfileMenuProps) => {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild className="cursor-pointer">
-        <Image
-          src={user.image ?? "/images/avatar.png"}
-          alt={user.name ?? "User"}
-          width={32}
-          height={32}
-          className="rounded-full"
-        />
+        <Avatar>
+          <AvatarImage
+            src={user.image || "/images/avatar.png"}
+            alt={user.name ?? "User"}
+          />
+        </Avatar>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={lang === "ar" ? "start" : "end"}>
         <DropdownMenuItem asChild className="cursor-pointer">

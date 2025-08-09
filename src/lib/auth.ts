@@ -58,7 +58,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user, account }) {
-      // Persist the OAuth access_token and or the user id to the token right after signin
       if (user) {
         token.role = user.role;
         token.id = user.id;
@@ -66,11 +65,35 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      // Send properties to the client, like an access_token and user id from a provider.
-      if (token) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as UserRole;
+      try {
+        const userId = token?.id as string | undefined;
+        if (userId) {
+          const dbUser = await prisma.user.findUnique({
+            where: { id: userId },
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              image: true,
+              role: true,
+            },
+          });
+
+          if (dbUser) {
+            session.user.id = dbUser.id;
+            session.user.name = dbUser.name ?? null;
+            session.user.email = dbUser.email ?? null;
+            session.user.image = dbUser.image ?? null;
+            session.user.role = dbUser.role ?? "USER";
+          } else {
+            if (token?.id) session.user.id = token?.id as string;
+            if (token?.role) session.user.role = token.role as UserRole;
+          }
+        }
+      } catch (err) {
+        console.error("session callback error:", err);
       }
+
       return session;
     },
   },

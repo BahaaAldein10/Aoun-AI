@@ -3,7 +3,7 @@
 import { dictionaries, SupportedLang } from "@/lib/dictionaries";
 import React, { createContext, useContext, useEffect, useState } from "react";
 
-type Dictionary = Awaited<ReturnType<(typeof dictionaries)["en"]>>;
+export type Dictionary = Awaited<ReturnType<(typeof dictionaries)["en"]>>;
 
 const DictionaryContext = createContext<Dictionary | null>(null);
 
