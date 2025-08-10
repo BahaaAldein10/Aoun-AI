@@ -2,58 +2,36 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Dictionary } from "@/contexts/dictionary-context";
+import { DataTable } from "@/components/ui/data-table"; // adjust path if needed
+import type { Dictionary } from "@/contexts/dictionary-context";
 import type { SupportedLang } from "@/lib/dictionaries";
-import { useMemo, useState } from "react";
-
-type Lead = {
-  id: string;
-  name?: string | null;
-  email?: string | null;
-  phone?: string | null;
-  status: string;
-  source?: string;
-  createdAt: string;
-};
+import { cn } from "@/lib/utils";
+import { Table } from "@tanstack/react-table";
+import { useState } from "react";
+import toast from "react-hot-toast";
+import { Lead, columns as makeColumns } from "./LeadsColumns";
 
 const LeadsClient = ({
-  initialLeads,
+  initialLeads = [],
   lang,
   dict,
 }: {
-  initialLeads: Lead[];
+  initialLeads?: Lead[];
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
-  const t = dict.dashboard_leads;
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [rows] = useState<Lead[]>(initialLeads ?? []);
+  const [tableInstance, setTableInstance] = useState<Table<Lead> | null>(null);
+  const [rows, setRows] = useState<Lead[]>(initialLeads ?? []);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (statusFilter !== "all" && r.status !== statusFilter) return false;
-      if (!q) return true;
-      return (
-        (r.name ?? "").toLowerCase().includes(q) ||
-        (r.email ?? "").toLowerCase().includes(q) ||
-        (r.phone ?? "").toLowerCase().includes(q)
-      );
-    });
-  }, [rows, query, statusFilter]);
-
+  const t: Record<string, string> = dict.dashboard_leads;
   const locale = lang === "ar" ? "ar" : "en-US";
+  const isRtl = lang === "ar";
 
   function downloadCsv() {
+    const dataToExport = tableInstance
+      ? tableInstance.getFilteredRowModel().rows.map((r) => r.original)
+      : rows;
+
     const headers = [
       t.th_name ?? "Name",
       t.th_contact ?? "Contact",
@@ -66,7 +44,7 @@ const LeadsClient = ({
       headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(","),
     ];
 
-    for (const r of filtered) {
+    for (const r of dataToExport) {
       const contact = r.email ?? r.phone ?? "";
       const capturedAt = r.createdAt
         ? new Date(r.createdAt).toLocaleString(locale)
@@ -94,157 +72,74 @@ const LeadsClient = ({
     a.download = `aoun-leads-${datePart}-${lang}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    toast.success(t.toast_exported ?? t.downloaded_csv ?? "Downloaded");
+  }
+
+  // action handlers (UI-only placeholders)
+  function handleView(row: Lead) {
+    toast(
+      t.toast_view_placeholder?.replace("{name}", row.name ?? row.id) ?? "View",
+    );
+  }
+
+  function handleContact(row: Lead) {
+    toast(
+      t.toast_contact_placeholder?.replace("{name}", row.name ?? row.id) ??
+        "Contact",
+    );
+  }
+
+  function handleDelete(id: string) {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    toast.success(t.toast_deleted ?? "Deleted");
   }
 
   return (
     <div className="space-y-6">
-      {/* Header: title + actions. Actions become stacked on small screens */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold rtl:text-right">{t.title}</h1>
-          <p className="text-muted-foreground text-sm">
-            {t.subtitle ?? t.description ?? "View and manage captured leads"}
-          </p>
+        <div className="space-y-2">
+          <h1 className="text-2xl font-bold">{t.title}</h1>
+          <p className="text-muted-foreground text-sm">{t.description}</p>
         </div>
 
-        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:justify-end">
-          {/* Controls: search, select, buttons - responsive widths */}
-          <div className="flex w-full gap-2 sm:w-auto">
-            <Input
-              className="w-full"
-              placeholder={t.search_placeholder}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v)}
-              dir={lang === "ar" ? "rtl" : "ltr"}
-            >
-              <SelectTrigger className="min-w-[140px] cursor-pointer">
-                <SelectValue placeholder={t.filter_all} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t.filter_all}</SelectItem>
-                <SelectItem value="new">{t.filter_new}</SelectItem>
-                <SelectItem value="contacted">{t.filter_contacted}</SelectItem>
-                <SelectItem value="qualified">{t.filter_qualified}</SelectItem>
-                <SelectItem value="converted">{t.filter_converted}</SelectItem>
-                <SelectItem value="lost">{t.filter_lost}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex gap-2">
-            <Button onClick={downloadCsv}>{t.download_csv}</Button>
-
-            <Button
-              variant="outline"
-              onClick={() => alert(t.connect_crm_placeholder)}
-            >
-              {t.connect_crm}
-            </Button>
-          </div>
+        <div className="flex gap-2">
+          <Button onClick={downloadCsv}>{t.download_csv}</Button>
+          <Button
+            variant="outline"
+            onClick={() => toast(t.connect_crm_placeholder ?? "Connect CRM")}
+          >
+            {t.connect_crm}
+          </Button>
         </div>
       </div>
 
-      <Card>
+      <Card className={cn("w-full", isRtl && "rtl:text-right")}>
         <CardHeader>
           <CardTitle>
             {t.table_title ?? t.captured_leads ?? "Captured Leads"}
           </CardTitle>
         </CardHeader>
+
         <CardContent>
-          {/* Desktop / tablet table (md and up) */}
-          <div className="hidden md:block">
-            <div className="max-h-[60vh] overflow-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-muted-foreground text-left text-xs rtl:text-right">
-                    <th className="p-2">{t.th_name}</th>
-                    <th className="p-2">{t.th_contact}</th>
-                    <th className="p-2">{t.th_status}</th>
-                    <th className="p-2">{t.th_source}</th>
-                    <th className="p-2">{t.th_captured_at}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={5}
-                        className="text-muted-foreground p-4 text-center"
-                      >
-                        {t.empty ?? "No leads yet"}
-                      </td>
-                    </tr>
-                  ) : (
-                    filtered.map((row) => (
-                      <tr key={row.id} className="border-t">
-                        <td className="p-2">{row.name ?? "—"}</td>
-                        <td className="p-2">{row.email ?? row.phone ?? "—"}</td>
-                        <td className="p-2">{row.status}</td>
-                        <td className="p-2">{row.source ?? "—"}</td>
-                        <td className="p-2">
-                          {new Date(row.createdAt).toLocaleString(locale)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Mobile list view (under md) */}
-          <div className="max-h-[60vh] space-y-2 overflow-auto md:hidden">
-            {filtered.length === 0 ? (
-              <div className="text-muted-foreground p-4 text-center">
-                {t.empty}
-              </div>
-            ) : (
-              filtered.map((row) => (
-                <div
-                  key={row.id}
-                  className="rounded-lg border p-3 shadow-sm"
-                  dir={lang === "ar" ? "rtl" : "ltr"}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium">{row.name ?? "—"}</div>
-                    <div className="text-muted-foreground text-xs">
-                      {row.status}
-                    </div>
-                  </div>
-
-                  <div className="text-muted-foreground mt-2 grid gap-1 text-sm">
-                    <div>
-                      <strong className="inline-block w-20">
-                        {t.th_contact}:
-                      </strong>
-                      <span className="ml-1">
-                        {row.email ?? row.phone ?? "—"}
-                      </span>
-                    </div>
-                    <div>
-                      <strong className="inline-block w-20">
-                        {t.th_source}:
-                      </strong>
-                      <span className="ml-1">{row.source ?? "—"}</span>
-                    </div>
-                    <div>
-                      <strong className="inline-block w-20">
-                        {t.th_captured_at}:
-                      </strong>
-                      <span className="ml-1">
-                        {new Date(row.createdAt).toLocaleString(locale)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <DataTable
+            columns={makeColumns({
+              t,
+              lang,
+              locale,
+              onView: handleView,
+              onContact: handleContact,
+              onDelete: handleDelete,
+            })}
+            data={rows}
+            lang={lang}
+            emptyMessage={t.empty}
+            searchPlaceholder={t.search_placeholder}
+            previousButton={t.previous_button}
+            nextButton={t.next_button}
+            onTableReady={setTableInstance}
+            initialPageSize={20}
+            getStatus={(r: Lead) => r.status ?? "new"}
+          />
         </CardContent>
       </Card>
     </div>

@@ -315,7 +315,7 @@ const IntegrationsPage = ({ dict }: IntegrationsClientProps) => {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="font-headline text-2xl font-bold">{t.title}</h1>
-          <p className="text-muted-foreground">{t.description}</p>
+          <p className="text-muted-foreground mt-1">{t.description}</p>
         </div>
       </div>
 

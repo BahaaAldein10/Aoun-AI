@@ -80,7 +80,7 @@ const ContactPage = async ({ params }: Props) => {
           {/* Chat Widget Card */}
           <div>
             <Card className="p-8">
-              <h3 className="mb-4 text-2xl font-bold">{t.chat_title}</h3>
+              <h2 className="mb-4 text-2xl font-bold">{t.chat_title}</h2>
               <p className="text-muted-foreground mb-6">{t.chat_desc}</p>
               {/* <ChatWidget /> */}
             </Card>

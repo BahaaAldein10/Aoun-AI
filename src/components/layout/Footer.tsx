@@ -46,6 +46,7 @@ const Footer = async ({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
+                  aria-label="Facebook"
                 >
                   <Icons.Facebook className="h-5 w-5" />
                 </Link>
@@ -57,6 +58,7 @@ const Footer = async ({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
+                  aria-label="Twitter"
                 >
                   <Icons.Twitter className="h-5 w-5" />
                 </Link>
@@ -68,6 +70,7 @@ const Footer = async ({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
+                  aria-label="Instagram"
                 >
                   <Icons.Instagram className="h-5 w-5" />
                 </Link>
@@ -76,7 +79,7 @@ const Footer = async ({
           </div>
 
           <div className="rtl:text-right">
-            <h4 className="mb-4 font-bold">{t.quickLinksTitle}</h4>
+            <h2 className="mb-4 font-bold">{t.quickLinksTitle}</h2>
             <ul className="space-y-2">
               {quickLinks.map((link) => (
                 <li key={link.text}>
@@ -92,7 +95,7 @@ const Footer = async ({
           </div>
 
           <div className="rtl:text-right">
-            <h4 className="mb-4 font-bold">{t.supportTitle}</h4>
+            <h2 className="mb-4 font-bold">{t.supportTitle}</h2>
             <ul className="space-y-2">
               {supportLinks.map((link) => (
                 <li key={link.text}>
@@ -108,7 +111,7 @@ const Footer = async ({
           </div>
 
           <div className="rtl:text-right">
-            <h4 className="mb-4 font-bold">{t.contactTitle}</h4>
+            <h2 className="mb-4 font-bold">{t.contactTitle}</h2>
             <ul className="space-y-3">
               <li className="flex gap-2 space-x-reverse text-sm">
                 <Mail className="text-primary mt-1 h-4 w-4 shrink-0" />

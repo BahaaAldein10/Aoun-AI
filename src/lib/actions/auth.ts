@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import z from "zod";
 import { signIn } from "../auth";
@@ -33,6 +34,8 @@ export async function loginUser({ email, password, lang }: LoginUserParams) {
       };
     }
 
+    const isAdmin = existingUser.role === UserRole.ADMIN;
+
     const isValidPassword = await bcrypt.compare(
       password,
       existingUser.password || "",
@@ -48,13 +51,14 @@ export async function loginUser({ email, password, lang }: LoginUserParams) {
       redirect: false,
       email: email,
       password: password,
-      callbackUrl: `/${lang}/dashboard`,
+      callbackUrl:
+        existingUser.role === "ADMIN" ? `/${lang}/admin` : `/${lang}/dashboard`,
     });
     if (res?.error) {
       return { success: false, errors: { general: res.error } };
     }
 
-    return { success: true };
+    return { success: true, isAdmin };
   } catch (error) {
     console.error("[LOGIN_ERROR]", error);
     return {

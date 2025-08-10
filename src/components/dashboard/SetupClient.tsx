@@ -47,6 +47,7 @@ import {
 import { useRef } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import toast from "react-hot-toast";
+import Spinner from "../shared/Spinner";
 
 /* --- voices (UI only) --- */
 const availableVoices = [
@@ -151,7 +152,7 @@ const SetupClient = ({
                 </TabsList>
 
                 {/* Tablet / Large phones: split into two rows of 2 (visible only when lg:hidden) */}
-                <TabsList className="grid w-full grid-cols-2 lg:hidden">
+                <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
                   <TabsTrigger value="url" className="cursor-pointer">
                     <LinkIcon className="mr-2" />
                     {t.generate_from_url}
@@ -161,8 +162,7 @@ const SetupClient = ({
                     {t.upload_documents}
                   </TabsTrigger>
                 </TabsList>
-
-                <TabsList className="grid w-full grid-cols-2 lg:hidden">
+                <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
                   <TabsTrigger value="manual" className="cursor-pointer">
                     <FileText className="mr-2" />
                     {t.manual_qa}
@@ -173,7 +173,31 @@ const SetupClient = ({
                   </TabsTrigger>
                 </TabsList>
 
-                {/* Small phones: single full-width row for the last tab (visible only when lg:hidden) */}
+                {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
+                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                  <TabsTrigger value="url" className="cursor-pointer">
+                    <LinkIcon className="mr-2" />
+                    {t.generate_from_url}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                  <TabsTrigger value="upload" className="cursor-pointer">
+                    <Upload className="mr-2" />
+                    {t.upload_documents}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                  <TabsTrigger value="manual" className="cursor-pointer">
+                    <FileText className="mr-2" />
+                    {t.manual_qa}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                  <TabsTrigger value="appearance" className="cursor-pointer">
+                    <Palette className="mr-2" />
+                    {t.appearance_tab}
+                  </TabsTrigger>
+                </TabsList>
                 <TabsList className="grid w-full grid-cols-1 lg:hidden">
                   <TabsTrigger value="voice" className="cursor-pointer">
                     <Wand2 className="mr-2" />
@@ -498,9 +522,13 @@ const SetupClient = ({
                       : (t.generate_button ?? "Create Knowledge Base")}
                   </Button> */}
                   <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting
-                      ? (t.crawling_button ?? "Reading website...")
-                      : (t.generate_button ?? "Create Knowledge Base")}
+                    {isSubmitting ? (
+                      <>
+                        <Spinner /> {t.generate_button}
+                      </>
+                    ) : (
+                      t.generate_button
+                    )}
                   </Button>
                 </div>
               </CardFooter>

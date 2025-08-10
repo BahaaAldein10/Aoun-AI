@@ -1,3 +1,4 @@
+import { Link2 } from "lucide-react";
 import type { SVGProps } from "react";
 import {
   siFacebook,
@@ -49,6 +50,7 @@ export const Icons = {
   Instagram: createSimpleIcon(siInstagram),
   WhatsApp: createSimpleIcon(siWhatsapp),
   Messenger: createSimpleIcon(siMessenger),
+  Link: (props: React.ComponentProps<"svg">) => <Link2 {...props} />,
   MetallicIcon: (props: SVGProps<SVGSVGElement>) => (
     <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" {...props}>
       <circle cx="50" cy="50" r="50" fill="url(#metallicGradient)" />

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/sheet";
 import { auth } from "@/lib/auth";
 import { getDictionary, SupportedLang } from "@/lib/dictionaries";
+import { UserRole } from "@prisma/client";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { LogIn, Menu } from "lucide-react";
 import Link from "next/link";
@@ -26,6 +27,7 @@ const Header = async ({
 
   const session = await auth();
   const user = session?.user;
+  const isAdmin = user?.role === UserRole.ADMIN;
 
   const navLinks = [
     { href: `/${lang}`, text: t.home },
@@ -67,7 +69,7 @@ const Header = async ({
           <LanguageSwitcher />
 
           {user ? (
-            <ProfileMenu user={user} t={t} lang={lang} />
+            <ProfileMenu user={user} t={t} lang={lang} isAdmin={isAdmin} />
           ) : (
             <>
               <Button variant="ghost" asChild>
@@ -124,7 +126,7 @@ const Header = async ({
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="text-muted-foreground w-fit hover:text-foreground px-2 transition-colors"
+                    className="text-muted-foreground hover:text-foreground w-fit px-2 transition-colors"
                   >
                     {link.text}
                   </Link>

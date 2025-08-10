@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 const HeroSection = ({
   lang,
   t,
+  isAdmin = false,
 }: {
   lang: string;
   t: {
@@ -13,6 +14,7 @@ const HeroSection = ({
     getStarted: string;
     viewPricing: string;
   };
+  isAdmin: boolean;
 }) => {
   return (
     <section className="py-12 text-center md:py-16">
@@ -25,7 +27,7 @@ const HeroSection = ({
         </p>
         <div className="flex flex-wrap justify-center gap-4">
           <Button size="lg" asChild className="transition hover:scale-105">
-            <Link href={`/${lang}/dashboard`}>
+            <Link href={isAdmin ? `/${lang}/admin` : `/${lang}/dashboard`}>
               <PhoneCall className="mr-2 rtl:mr-0 rtl:ml-2" /> {t.getStarted}
             </Link>
           </Button>

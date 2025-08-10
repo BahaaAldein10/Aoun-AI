@@ -55,6 +55,18 @@ const SignupForm = ({ t, lang }: SignupFormProps) => {
     formState: { isSubmitting },
   } = form;
   const [generalError, setGeneralError] = useState<string | null>(null);
+  const [activeProvider, setActiveProvider] = useState<
+    "google" | "facebook" | null
+  >(null);
+
+  const handleProviderLogin = async (provider: "google" | "facebook") => {
+    try {
+      setActiveProvider(provider);
+      await signIn(provider, { callbackUrl: `/${lang}/dashboard` });
+    } finally {
+      setActiveProvider(null);
+    }
+  };
 
   async function onSubmit(data: SignupFormValues) {
     setGeneralError(null);
@@ -169,7 +181,7 @@ const SignupForm = ({ t, lang }: SignupFormProps) => {
             <span className="w-full border-t" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-background text-muted-foreground px-2">
+            <span className="bg-card text-muted-foreground px-2">
               {t.or_continue_with}
             </span>
           </div>
@@ -180,24 +192,41 @@ const SignupForm = ({ t, lang }: SignupFormProps) => {
           <Button
             variant="outline"
             type="button"
-            className="cursor-pointer"
-            onClick={() =>
-              signIn("google", { callbackUrl: `/${lang}/dashboard` })
-            }
+            className="disabled:cursor-not-allowed"
+            onClick={() => handleProviderLogin("google")}
+            disabled={!!activeProvider || isSubmitting}
           >
-            <Icons.Google className="mr-2 h-4 w-4 rtl:mr-0 rtl:ml-2" />
-            Google
+            {activeProvider === "google" ? (
+              <>
+                <Spinner className="mr-2 rtl:mr-0 rtl:ml-2" />
+                Google
+              </>
+            ) : (
+              <>
+                <Icons.Google className="mr-2 rtl:mr-0 rtl:ml-2" />
+                Google
+              </>
+            )}
           </Button>
+
           <Button
             variant="outline"
             type="button"
-            className="cursor-pointer"
-            onClick={() =>
-              signIn("facebook", { callbackUrl: `/${lang}/dashboard` })
-            }
+            className="disabled:cursor-not-allowed"
+            onClick={() => handleProviderLogin("facebook")}
+            disabled={!!activeProvider || isSubmitting}
           >
-            <Icons.Facebook className="mr-2 h-4 w-4 rtl:mr-0 rtl:ml-2" />
-            Facebook
+            {activeProvider === "facebook" ? (
+              <>
+                <Spinner className="mr-2 rtl:mr-0 rtl:ml-2" />
+                Facebook
+              </>
+            ) : (
+              <>
+                <Icons.Facebook className="mr-2 rtl:mr-0 rtl:ml-2" />
+                Facebook
+              </>
+            )}
           </Button>
         </div>
 

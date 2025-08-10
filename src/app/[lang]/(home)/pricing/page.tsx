@@ -42,7 +42,7 @@ const PricingPage = async ({ params }: Props) => {
     <section className="py-16 md:py-24">
       <div className="container">
         {/* Title Block */}
-        <div className="mx-auto max-w-3xl text-center rtl:text-right">
+        <div className="mx-auto max-w-3xl text-center">
           <h1 className="text-4xl font-bold tracking-tighter md:text-5xl">
             {t.title}
           </h1>

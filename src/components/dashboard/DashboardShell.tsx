@@ -20,14 +20,14 @@ const DashboardShell = async ({
 
   return (
     <SidebarProvider>
-      <div className="bg-background flex min-h-screen w-full">
+      <div className="bg-background flex min-h-screen w-full min-w-0">
         {/* Sidebar */}
         <div className={isRtl ? "rtl" : ""}>
           <DashboardSidebar lang={lang} dict={dict} user={user} />
         </div>
 
         {/* Main area */}
-        <div className="flex flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col">
           {/* Top header */}
           <header className="bg-card flex items-center justify-between gap-4 border-b px-4 py-3">
             <div className="flex items-center gap-2">
@@ -43,7 +43,7 @@ const DashboardShell = async ({
           </header>
 
           {/* Page content */}
-          <main className="flex-1 p-6">{children}</main>
+          <main className="flex-1 overflow-x-auto p-6">{children}</main>
         </div>
       </div>
     </SidebarProvider>

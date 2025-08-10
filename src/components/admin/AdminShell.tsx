@@ -1,0 +1,49 @@
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { getDictionary, SupportedLang } from "@/lib/dictionaries";
+import { User } from "next-auth";
+import React from "react";
+import { LanguageSwitcher } from "../shared/LanguageSwitcher";
+import AdminSidebar from "./AdminSidebar";
+
+interface DashboardShellProps {
+  children: React.ReactNode;
+  user: User;
+  lang: SupportedLang;
+}
+const AdminShell = async ({ children, user, lang }: DashboardShellProps) => {
+  const isRtl = lang === "ar";
+  const dict = await getDictionary(lang);
+
+  return (
+    <SidebarProvider>
+      <div className="bg-background flex min-h-screen w-full min-w-0">
+        {/* Sidebar */}
+        <div className={isRtl ? "rtl" : ""}>
+          <AdminSidebar lang={lang} dict={dict} user={user} />
+        </div>
+
+        {/* Main area */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Top header */}
+          <header className="bg-card flex items-center justify-between gap-4 border-b px-4 py-3">
+            <div className="flex items-center gap-2">
+              {/* Mobile sidebar trigger */}
+              <SidebarTrigger />
+
+              <h1 className="text-lg font-semibold">
+                {dict.dashboard_layout.dashboard}
+              </h1>
+
+              <LanguageSwitcher />
+            </div>
+          </header>
+
+          {/* Page content */}
+          <main className="w-full flex-1 overflow-x-auto p-6">{children}</main>
+        </div>
+      </div>
+    </SidebarProvider>
+  );
+};
+
+export default AdminShell;

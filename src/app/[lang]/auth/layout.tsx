@@ -3,5 +3,5 @@ export default async function AuthLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <div className="py-16">{children}</div>;
+  return <div className="py-8 md:py-16">{children}</div>;
 }

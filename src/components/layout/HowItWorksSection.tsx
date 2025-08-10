@@ -32,7 +32,7 @@ const HowItWorksSection = ({
           </h2>
           {t.steps.map((step, index) => (
             <div key={index} className="flex gap-4 rtl:space-x-reverse">
-              <CheckCircle className="text-red-500 mt-1 h-8 w-8 shrink-0" />
+              <CheckCircle className="text-primary mt-1 h-8 w-8 shrink-0" />
               <div>
                 <h3 className="text-lg font-semibold">{step.title}</h3>
                 <p className="text-muted-foreground mt-1">{step.text}</p>

@@ -128,99 +128,85 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
       <Card>
         <CardHeader>
           <CardTitle className="font-headline">{t.title_embed}</CardTitle>
-          <CardDescription>{t.desc_embed}</CardDescription>
+          <CardDescription className="mt-1">{t.desc_embed}</CardDescription>
         </CardHeader>
 
         <CardContent>
           <Tabs defaultValue="messaging" dir={dir}>
             {/* Desktop: 5 columns (hidden on <= lg) */}
             <TabsList className="grid w-full grid-cols-5 max-lg:hidden">
-              <TabsTrigger
-                value="messaging"
-                className="flex cursor-pointer items-center"
-              >
-                <MessageSquare className="mr-2 h-4 w-4" />
+              <TabsTrigger value="messaging" className="cursor-pointer">
+                <MessageSquare className="mr-2" />
                 {t.messaging_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="website"
-                className="flex cursor-pointer items-center"
-              >
-                <Globe className="mr-2 h-4 w-4" />
+              <TabsTrigger value="website" className="cursor-pointer">
+                <Globe className="mr-2" />
                 {t.website_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="api_docs"
-                className="flex cursor-pointer items-center"
-              >
-                <FileText className="mr-2 h-4 w-4" />
+              <TabsTrigger value="api_docs" className="cursor-pointer">
+                <FileText className="mr-2" />
                 {t.api_docs_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="ios"
-                className="flex cursor-pointer items-center"
-              >
-                <Smartphone className="mr-2 h-4 w-4" />
+              <TabsTrigger value="ios" className="cursor-pointer">
+                <Smartphone className="mr-2" />
                 {t.ios_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="android"
-                className="flex cursor-pointer items-center"
-              >
-                <Phone className="mr-2 h-4 w-4" />
+              <TabsTrigger value="android" className="cursor-pointer">
+                <Phone className="mr-2" />
                 {t.android_tab}
               </TabsTrigger>
             </TabsList>
 
-            {/* Tablet / Large phones: first row (visible only when lg:hidden) */}
-            <TabsList className="grid w-full grid-cols-2 lg:hidden">
-              <TabsTrigger
-                value="messaging"
-                className="flex cursor-pointer items-center"
-              >
-                <MessageSquare className="mr-2 h-4 w-4" />
+            {/* Tablet / Large phones: split into two rows of 2 (visible only when lg:hidden) */}
+            <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
+              <TabsTrigger value="messaging" className="cursor-pointer">
+                <MessageSquare className="mr-2" />
                 {t.messaging_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="website"
-                className="flex cursor-pointer items-center"
-              >
-                <Globe className="mr-2 h-4 w-4" />
+              <TabsTrigger value="website" className="cursor-pointer">
+                <Globe className="mr-2" />
                 {t.website_tab}
               </TabsTrigger>
             </TabsList>
-
-            {/* Tablet / Large phones: second row */}
-            <TabsList className="grid w-full grid-cols-2 lg:hidden">
-              <TabsTrigger
-                value="api_docs"
-                className="flex cursor-pointer items-center"
-              >
-                <FileText className="mr-2 h-4 w-4" />
+            <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
+              <TabsTrigger value="api_docs" className="cursor-pointer">
+                <FileText className="mr-2" />
                 {t.api_docs_tab}
               </TabsTrigger>
-
-              <TabsTrigger
-                value="ios"
-                className="flex cursor-pointer items-center"
-              >
-                <Smartphone className="mr-2 h-4 w-4" />
+              <TabsTrigger value="ios" className="cursor-pointer">
+                <Smartphone className="mr-2" />
                 {t.ios_tab}
               </TabsTrigger>
             </TabsList>
 
-            {/* Small phones: last tab full width */}
+            {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
             <TabsList className="grid w-full grid-cols-1 lg:hidden">
-              <TabsTrigger
-                value="android"
-                className="flex cursor-pointer items-center"
-              >
-                <Phone className="mr-2 h-4 w-4" />
+              <TabsTrigger value="messaging" className="cursor-pointer">
+                <MessageSquare className="mr-2" />
+                {t.messaging_tab}
+              </TabsTrigger>
+            </TabsList>
+            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+              <TabsTrigger value="website" className="cursor-pointer">
+                <Globe className="mr-2" />
+                {t.website_tab}
+              </TabsTrigger>
+            </TabsList>
+            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+              <TabsTrigger value="api_docs" className="cursor-pointer">
+                <FileText className="mr-2" />
+                {t.api_docs_tab}
+              </TabsTrigger>
+            </TabsList>
+            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+              <TabsTrigger value="ios" className="cursor-pointer">
+                <Smartphone className="mr-2" />
+                {t.ios_tab}
+              </TabsTrigger>
+            </TabsList>
+            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+              <TabsTrigger value="android" className="cursor-pointer">
+                <Phone className="mr-2" />
                 {t.android_tab}
               </TabsTrigger>
             </TabsList>

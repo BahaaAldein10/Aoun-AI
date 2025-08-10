@@ -10,7 +10,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Dictionary } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
-import { cn } from "@/lib/utils";
+import { cn, cssVar } from "@/lib/utils";
 import {
   Activity,
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
 import {
   Bar,
   BarChart,
+  Cell,
   Legend,
   Line,
   LineChart,
@@ -105,7 +106,7 @@ const DashboardClient = ({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalInteractions}</div>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground mt-1 text-xs">
               {t.overview_summary ?? ""} {/* optional small helper text */}
             </p>
           </CardContent>
@@ -123,7 +124,7 @@ const DashboardClient = ({
             <div className="text-2xl font-bold">
               {usage.botCount} / {usage.botLimit}
             </div>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground mt-1 text-xs">
               {usage.planName ?? t.plan}
             </p>
           </CardContent>
@@ -145,7 +146,7 @@ const DashboardClient = ({
             <Progress
               value={usagePercentage}
               dir={isRTL ? "rtl" : "ltr"}
-              className="mt-2 h-2"
+              className="mt-4 h-2"
             />
 
             {showUsageWarning && (
@@ -168,7 +169,9 @@ const DashboardClient = ({
             <div className="text-2xl font-bold">
               {usage.responseAccuracy ?? "—"}
             </div>
-            <p className="text-muted-foreground text-xs">{t.from_last_week}</p>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {t.from_last_week}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -181,12 +184,14 @@ const DashboardClient = ({
             <div className="flex items-start justify-between">
               <div>
                 <CardTitle>{t.interactions_overview}</CardTitle>
-                <CardDescription>{t.interactions_last_7_days}</CardDescription>
+                <CardDescription className="mt-2">
+                  {t.interactions_last_7_days}
+                </CardDescription>
               </div>
             </div>
           </CardHeader>
 
-          <CardContent>
+          <CardContent dir="ltr">
             <ResponsiveContainer width="100%" height={300}>
               <LineChart
                 data={interactionsData}
@@ -194,26 +199,32 @@ const DashboardClient = ({
               >
                 <XAxis
                   dataKey="date"
-                  stroke="#888888"
+                  stroke={cssVar("--muted-foreground")}
                   fontSize={12}
                   tickLine={false}
                   axisLine={false}
                   reversed={isRTL}
                 />
                 <YAxis
-                  stroke="#888888"
+                  stroke={cssVar("--muted-foreground")}
                   fontSize={12}
                   tickLine={false}
                   axisLine={false}
                   orientation={isRTL ? "right" : "left"}
                 />
-                <Tooltip />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: cssVar("--card"),
+                    borderColor: cssVar("--border"),
+                    color: cssVar("--foreground"),
+                  }}
+                />
                 <Legend />
                 <Line
                   type="monotone"
                   dataKey="value"
                   name={t.interactions}
-                  stroke="hsl(var(--primary))"
+                  stroke={cssVar("--chart-1")}
                   activeDot={{ r: 6 }}
                 />
               </LineChart>
@@ -225,9 +236,11 @@ const DashboardClient = ({
         <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle>{t.channel_breakdown}</CardTitle>
-            <CardDescription>{t.channel_breakdown_desc}</CardDescription>
+            <CardDescription className="mt-1">
+              {t.channel_breakdown_desc}
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent dir="ltr">
             <ResponsiveContainer width="100%" height={300}>
               <BarChart
                 data={[
@@ -242,20 +255,60 @@ const DashboardClient = ({
                 <YAxis
                   type="category"
                   dataKey="name"
-                  stroke="#888888"
+                  stroke={cssVar("--muted-foreground")}
                   fontSize={12}
                   tickLine={false}
                   axisLine={false}
                   width={120}
                   orientation={isRTL ? "right" : "left"}
                 />
-                <Tooltip cursor={{ fill: "hsl(var(--muted))" }} />
+                <Tooltip
+                  cursor={{ fill: cssVar("--muted") }}
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload || !payload.length) return null;
+                    return (
+                      <div
+                        style={{
+                          backgroundColor: cssVar("--card"),
+                          border: `1px solid ${cssVar("--border")}`,
+                          padding: "8px 12px",
+                          borderRadius: "6px",
+                        }}
+                      >
+                        <p
+                          style={{
+                            color: cssVar("--foreground"),
+                            marginBottom: "4px",
+                          }}
+                        >
+                          {label}
+                        </p>
+                        {payload.map((entry, index) => (
+                          <p
+                            key={`value-${index}`}
+                            style={{
+                              color: cssVar("--primary"),
+                              fontWeight: 500,
+                            }}
+                          >
+                            {entry.value}
+                          </p>
+                        ))}
+                      </div>
+                    );
+                  }}
+                />
                 <Bar
                   dataKey="value"
                   barSize={20}
-                  fill="hsl(var(--primary))"
                   radius={isRTL ? [0, 6, 6, 0] : [6, 0, 0, 6]}
-                />
+                >
+                  {["--chart-1", "--chart-2", "--chart-3", "--chart-4"].map(
+                    (varName, index) => (
+                      <Cell key={`cell-${index}`} fill={cssVar(varName)} />
+                    ),
+                  )}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </CardContent>

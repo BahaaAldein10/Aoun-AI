@@ -79,7 +79,7 @@ export default function DashboardSidebar({
             href={`/${lang}`}
             className={cn(
               "flex items-center gap-2 rtl:mr-2 rtl:ml-0",
-              isRtl ? "ml-2 rtl:mr-2 rtl:ml-0" : "",
+              isRtl ? "rtl:mr-2 rtl:ml-0" : "ml-2",
             )}
           >
             <Icons.Logo className="text-primary size-7" />
