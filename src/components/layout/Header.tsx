@@ -11,8 +11,8 @@ import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { UserRole } from "@prisma/client";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { LogIn, Menu } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
-import { Icons } from "../shared/Icons";
 import { LanguageSwitcher } from "../shared/LanguageSwitcher";
 import ProfileMenu from "../shared/ProfileMenu";
 
@@ -46,7 +46,7 @@ const Header = async ({
             href={`/${lang}`}
             className="flex items-center gap-2 rtl:text-right"
           >
-            <Icons.Logo className="text-primary h-6 w-6" />
+            <Image src="/images/logo.png" width={24} height={24} alt="Logo" />
             <span className="text-lg font-bold">{t.title}</span>
           </Link>
 
@@ -111,7 +111,12 @@ const Header = async ({
                     href={`/${lang}`}
                     className="flex w-fit items-center gap-2"
                   >
-                    <Icons.Logo className="text-primary size-6" />
+                    <Image
+                      src="/images/logo.png"
+                      width={24}
+                      height={24}
+                      alt="Logo"
+                    />
                     <span className="font-bold">{t.title}</span>
                   </Link>
                 </div>

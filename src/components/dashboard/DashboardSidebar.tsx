@@ -35,6 +35,7 @@ import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icons } from "../shared/Icons";
+import Image from "next/image";
 
 export default function DashboardSidebar({
   lang,
@@ -82,7 +83,7 @@ export default function DashboardSidebar({
               isRtl ? "rtl:mr-2 rtl:ml-0" : "ml-2",
             )}
           >
-            <Icons.Logo className="text-primary size-7" />
+            <Image src="/images/logo.png" width={28} height={28} alt="Logo" />
             <span className="text-sidebar-foreground text-lg font-bold">
               {dict.header.title}
             </span>

@@ -2,6 +2,7 @@ import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { Mail, MapPin, Phone } from "lucide-react";
 import Link from "next/link";
 import { Icons } from "../shared/Icons";
+import Image from "next/image";
 
 const Footer = async ({
   params,
@@ -34,7 +35,7 @@ const Footer = async ({
               href={`/${lang}`}
               className="flex w-fit items-center gap-2 rtl:space-x-reverse"
             >
-              <Icons.Logo className="text-primary h-7 w-7" />
+              <Image src="/images/logo.png" width={28} height={28} alt="Logo" />
               <span className="text-xl font-bold">{t.aboutTitle}</span>
             </Link>
             <p className="text-muted-foreground text-sm">{t.aboutText}</p>
