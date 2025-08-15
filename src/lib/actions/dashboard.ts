@@ -2,7 +2,9 @@
 
 import { Dictionary } from "@/contexts/dictionary-context";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import z from "zod";
+import { auth } from "../auth";
 import { SupportedLang } from "../dictionaries";
 import { prisma } from "../prisma";
 import { settingsSchema } from "../schemas/dashboard";
@@ -36,6 +38,45 @@ export async function updateSettingsName(params: UpdateSettingsNameParams) {
     };
   } catch (error) {
     console.error("[UPDATE_USERNAME_ERROR]", error);
+    return { success: false };
+  }
+}
+
+type SaveFileParams = {
+  fileUrl: string;
+  fileName: string;
+  fileType?: string | null;
+  fileSize?: number;
+  lang: SupportedLang;
+};
+
+export async function saveFileToDB({
+  fileUrl,
+  fileName,
+  fileType,
+  fileSize,
+  lang,
+}: SaveFileParams) {
+  try {
+    const session = await auth();
+    if (!session) {
+      return redirect(`${lang}/auth/login`);
+    }
+
+    const file = await prisma.uploadedFile.create({
+      data: {
+        userId: session.user.id,
+        url: fileUrl,
+        filename: fileName,
+        fileType: fileType ?? null,
+        size: fileSize,
+        meta: {},
+      },
+    });
+
+    return { success: true, file };
+  } catch (error) {
+    console.error("[SAVE_FILE_ERROR]", error);
     return { success: false };
   }
 }

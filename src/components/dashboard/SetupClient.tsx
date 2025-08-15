@@ -28,6 +28,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dictionary } from "@/contexts/dictionary-context";
+import { saveFileToDB } from "@/lib/actions/dashboard";
 import { SupportedLang } from "@/lib/dictionaries";
 import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,7 @@ import {
   Volume2,
   Wand2,
 } from "lucide-react";
-import { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 import Spinner from "../shared/Spinner";
@@ -64,6 +65,10 @@ const SetupClient = ({
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [url, setUrl] = useState("");
+
   const t = dict.dashboard_setup;
   // const [isCrawling, setIsCrawling] = useState(false);
   // const [isTestingVoice, startVoiceTestTransition] = useTransition();
@@ -92,6 +97,70 @@ const SetupClient = ({
     control,
     name: "faq",
   });
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setFile(file);
+  };
+
+  const handleUpload = async () => {
+    if (!file) {
+      toast.error("Please select a file first");
+      return;
+    }
+
+    setUploading(true);
+
+    try {
+      // send file to our server route
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: fd,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("Upload API error", err);
+        toast.error("Upload failed (server).");
+        return;
+      }
+
+      const data = await res.json();
+      const downloadURL = data?.url;
+      if (!downloadURL) {
+        console.error("No URL returned from /api/upload", data);
+        toast.error("Upload failed (no URL).");
+        return;
+      }
+
+      setUrl(downloadURL);
+
+      // Call your server action to persist file metadata to DB
+      // saveFileToDB is a Server Action (you already implemented it in your actions file)
+      const result = await saveFileToDB({
+        fileUrl: downloadURL,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        lang,
+      });
+
+      if (!result?.success) {
+        console.error("Failed to save file metadata:", result);
+        toast.error("Uploaded but failed to save file info.");
+      } else {
+        toast.success("File uploaded and saved!");
+      }
+    } catch (err) {
+      console.error("Upload failed", err);
+      toast.error("Upload failed. See console for details.");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleTestVoice = () => {};
 
@@ -174,31 +243,31 @@ const SetupClient = ({
                 </TabsList>
 
                 {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
-                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="url" className="cursor-pointer">
                     <LinkIcon className="mr-2" />
                     {t.generate_from_url}
                   </TabsTrigger>
                 </TabsList>
-                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="upload" className="cursor-pointer">
                     <Upload className="mr-2" />
                     {t.upload_documents}
                   </TabsTrigger>
                 </TabsList>
-                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="manual" className="cursor-pointer">
                     <FileText className="mr-2" />
                     {t.manual_qa}
                   </TabsTrigger>
                 </TabsList>
-                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="appearance" className="cursor-pointer">
                     <Palette className="mr-2" />
                     {t.appearance_tab}
                   </TabsTrigger>
                 </TabsList>
-                <TabsList className="grid w-full grid-cols-1 lg:hidden">
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="voice" className="cursor-pointer">
                     <Wand2 className="mr-2" />
                     {t.custom_voice_tab}
@@ -275,13 +344,37 @@ const SetupClient = ({
                     <p className="text-muted-foreground mb-4">
                       {t.upload_desc}
                     </p>
+                    {/* File input */}
+                    <Input type="file" onChange={handleFileChange} />
+                    {/* Optional: show selected file name */}
+                    {file && <p className="mt-2 text-sm">{file.name}</p>}
                     <Button
                       type="button"
                       size="lg"
-                      onClick={() => toast(t.upload_button + " — Coming soon")}
+                      onClick={handleUpload}
+                      disabled={uploading}
+                      className="mt-4"
                     >
-                      <Upload className="mr-2" /> {t.upload_button}
+                      {uploading ? (
+                        <>
+                          {/* <Spinner /> {t.uploading ?? "Uploading..."} */}
+                          <Spinner /> {"Uploading..."}
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="mr-2" /> {t.upload_button}
+                        </>
+                      )}
                     </Button>
+                    {/* optional: show resulting URL */}
+                    {url && (
+                      <p className="mt-3 text-xs break-all">
+                        Uploaded URL:{" "}
+                        <a href={url} target="_blank" rel="noreferrer">
+                          {url}
+                        </a>
+                      </p>
+                    )}{" "}
                   </div>
                 </TabsContent>
 

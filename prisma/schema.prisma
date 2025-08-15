@@ -268,10 +268,13 @@ model Plan {
   name            PlanName @unique
   title           String
   description     String?
-  price           String
+  price           String // human readable e.g. "$19 / month"
+  priceAmount     Int? // integer cents (e.g. 1900)
+  interval        String? // "month" | "year" (optional)
+  stripePriceId   String? // stripe price id (price_...)
   minutesPerMonth Int
   agents          Int
-  features        Json?
+  features        String[]
   popular         Boolean  @default(false)
   createdAt       DateTime @default(now())
 
