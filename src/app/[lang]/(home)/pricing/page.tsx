@@ -12,7 +12,7 @@ import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
 import { Plan, SubscriptionStatus } from "@prisma/client";
-import { ArrowDown, ArrowUp, Check, Clock, Star } from "lucide-react";
+import { Check, Clock, Star } from "lucide-react";
 import type { Metadata } from "next";
 
 type Props = {
@@ -78,15 +78,13 @@ const PricingPage = async ({ params }: Props) => {
     return meta as SubscriptionMeta;
   };
 
+  // Simplified button props: only current / free / subscribe
   const getButtonProps = (plan: Plan) => {
     const isCurrentPlan = currentSubscription?.planId === plan.id;
     const isFree = plan.priceAmount === 0;
-    const currentPlanAmount = currentSubscription?.plan?.priceAmount || 0;
-    const targetPlanAmount = plan.priceAmount || 0;
     const meta = getSubscriptionMeta(currentSubscription?.meta);
 
     if (isCurrentPlan) {
-      // Check for scheduled downgrades
       const scheduledDowngrade = meta?.scheduledDowngrade;
       if (scheduledDowngrade) {
         return {
@@ -106,44 +104,29 @@ const PricingPage = async ({ params }: Props) => {
     }
 
     if (isFree) {
+      // For free plan, guests can "Get Started", logged-in users can "Downgrade" if they want
       if (currentSubscription) {
         return {
           text: t.downgrade || "Downgrade",
           disabled: false,
           variant: "outline" as const,
-          isDowngrade: true,
+          isCurrentPlan: false,
         };
       }
       return {
         text: t.getStarted || "Get Started",
         disabled: false,
         variant: plan.popular ? ("default" as const) : ("outline" as const),
+        isCurrentPlan: false,
       };
     }
 
-    // Check if user is downgrading or upgrading
-    if (currentSubscription?.plan) {
-      if (targetPlanAmount > currentPlanAmount) {
-        return {
-          text: t.upgrade || "Upgrade",
-          disabled: false,
-          variant: plan.popular ? ("default" as const) : ("outline" as const),
-          isUpgrade: true,
-        };
-      } else if (targetPlanAmount < currentPlanAmount) {
-        return {
-          text: t.downgrade || "Downgrade",
-          disabled: false,
-          variant: "outline" as const,
-          isDowngrade: true,
-        };
-      }
-    }
-
+    // Default: subscribe
     return {
       text: t.subscribe || "Subscribe",
       disabled: false,
       variant: plan.popular ? ("default" as const) : ("outline" as const),
+      isCurrentPlan: false,
     };
   };
 
@@ -223,15 +206,6 @@ const PricingPage = async ({ params }: Props) => {
             {plans.map((plan) => {
               const buttonProps = getButtonProps(plan);
               const isCurrentPlan = currentSubscription?.planId === plan.id;
-              const currentPlanAmount =
-                currentSubscription?.plan?.priceAmount || 0;
-              const targetPlanAmount = plan.priceAmount || 0;
-              const isUpgrade =
-                currentSubscription && targetPlanAmount > currentPlanAmount;
-              const isDowngrade =
-                currentSubscription &&
-                targetPlanAmount < currentPlanAmount &&
-                targetPlanAmount >= 0;
 
               return (
                 <Card
@@ -255,20 +229,6 @@ const PricingPage = async ({ params }: Props) => {
                       <div className="bg-primary text-primary-foreground flex items-center gap-1 rounded-full px-4 py-2 text-sm font-medium">
                         <Star className="h-3 w-3" />
                         {t.popularBadge || "Most Popular"}
-                      </div>
-                    </div>
-                  ) : isUpgrade ? (
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
-                      <div className="flex items-center gap-1 rounded-full bg-blue-500 px-4 py-2 text-sm font-medium text-white">
-                        <ArrowUp className="h-3 w-3" />
-                        {t.upgrade || "Upgrade"}
-                      </div>
-                    </div>
-                  ) : isDowngrade ? (
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
-                      <div className="flex items-center gap-1 rounded-full bg-orange-500 px-4 py-2 text-sm font-medium text-white">
-                        <ArrowDown className="h-3 w-3" />
-                        {t.downgrade || "Downgrade"}
                       </div>
                     </div>
                   ) : null}
@@ -297,18 +257,22 @@ const PricingPage = async ({ params }: Props) => {
                   </CardContent>
 
                   <CardFooter>
-                    <CheckoutButton
-                      planId={plan.id}
-                      lang={lang}
-                      SubscribeText={buttonProps.text}
-                      RedirectingText={t.redirecting_button || "Redirecting..."}
-                      popular={plan.popular && !isCurrentPlan}
-                      disabled={buttonProps.disabled}
-                      variant={buttonProps.variant}
-                      isCurrentPlan={buttonProps.isCurrentPlan}
-                      isUpgrade={buttonProps.isUpgrade}
-                      isDowngrade={buttonProps.isDowngrade}
-                    />
+                    {currentSubscription ? (
+                      <></>
+                    ) : (
+                      <CheckoutButton
+                        planId={plan.id}
+                        lang={lang}
+                        SubscribeText={buttonProps.text}
+                        RedirectingText={
+                          t.redirecting_button || "Redirecting..."
+                        }
+                        popular={plan.popular && !isCurrentPlan}
+                        disabled={buttonProps.disabled}
+                        variant={buttonProps.variant}
+                        isCurrentPlan={buttonProps.isCurrentPlan}
+                      />
+                    )}
                   </CardFooter>
                 </Card>
               );
