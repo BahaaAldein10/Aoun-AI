@@ -63,68 +63,17 @@
     "cta": "Choose Plan",
     "cta_free": "Try Now for Free",
     "cta_contact_sales": "Contact Sales",
-    "plans": {
-      "free": {
-        "name": "Start for Free",
-        "description": "For new users to explore the tools and get familiar with the platform without commitment.",
-        "price": "$0",
-        "popular": false,
-        "features": [
-          "30 min/month",
-          "1 agent",
-          "3 daily uses",
-          "Limited tools",
-          "No direct support",
-          "Watermark on results",
-          "No credit card required"
-        ]
-      },
-      "starter": {
-        "name": "Starter",
-        "description": "Ideal for small businesses and individuals ready to fully automate their interactions.",
-        "price": "$19 / month",
-        "popular": false,
-        "features": [
-          "500 min/month",
-          "2 agents",
-          "Everything in Free, plus:",
-          "Advanced analytics",
-          "Community support",
-          "No watermark",
-          "Overage: $0.05/min"
-        ]
-      },
-      "pro": {
-        "name": "Pro",
-        "description": "For growing companies needing advanced features and full support to scale.",
-        "price": "$49 / month",
-        "popular": true,
-        "features": [
-          "2,000 min/month",
-          "5 agents",
-          "Everything in Starter, plus:",
-          "Email & chat support",
-          "Full API Access",
-          "Voice Cloning (beta)",
-          "Overage: $0.03/min"
-        ]
-      },
-      "enterprise": {
-        "name": "Enterprise",
-        "description": "Custom solution for large enterprises requiring integrations and dedicated support.",
-        "price": "Custom",
-        "popular": false,
-        "features": [
-          "10,000 min/month",
-          "50 agents",
-          "Everything in Pro, plus:",
-          "Unlimited agents & minutes",
-          "Custom integrations",
-          "Dedicated support manager",
-          "On-premise option"
-        ]
-      }
-    }
+    "popularBadge": "Most Popular",
+    "currentPlan": "Current Plan",
+    "getStarted": "Get Started",
+    "upgrade": "Upgrade",
+    "downgrade": "Downgrade",
+    "subscribe": "Subscribe",
+    "currentlyOn": "You're currently on",
+    "renewsOn": "Renews on",
+    "scheduledDowngrade": "You have a scheduled plan change.",
+    "downgradingOn": "Downgrading on",
+    "pastDueWarning": "Your subscription payment is past due. Please update your payment method to continue using the service."
   },
   "footer": {
     "aboutTitle": "Aoun",

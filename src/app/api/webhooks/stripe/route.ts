@@ -31,6 +31,8 @@ function mapStripeStatusToPrisma(status?: string): SubscriptionStatus {
       return SubscriptionStatus.TRIALING;
     case "unpaid":
       return SubscriptionStatus.UNPAID;
+    case "failed":
+      return SubscriptionStatus.FAILED;
     default:
       console.warn(`Unknown Stripe status: ${status}, defaulting to TRIALING`);
       return SubscriptionStatus.TRIALING;
@@ -250,14 +252,18 @@ export async function POST(req: Request) {
         break;
       }
 
+      // Handle invoice payment failures for downgrades
+      case "invoice.payment_failed": {
+        await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
+        break;
+      }
+
       default:
         console.log(`Unhandled Stripe event type: ${event.type}`);
         break;
     }
 
-    // Mark event as processed
     await markEventProcessed(event.id);
-
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -265,7 +271,6 @@ export async function POST(req: Request) {
       `Error processing webhook event ${event.type}:`,
       errorMessage,
     );
-
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
@@ -408,7 +413,10 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
       currency: invoice.currency || "usd",
       provider: "stripe",
       providerPaymentId: invoice.id,
-      status: invoice.status === "paid" ? "SUCCEEDED" : "PENDING",
+      status:
+        invoice.status === "paid"
+          ? SubscriptionStatus.SUCCEEDED
+          : SubscriptionStatus.PENDING,
       meta: {
         invoiceId: invoice.id,
         amountPaid: invoice.amount_paid,
@@ -463,9 +471,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
 
 // Handle subscription updates
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
-  console.log(
-    `Processing ${subscription.object === "subscription" ? "subscription update" : "subscription creation"}`,
-  );
+  console.log(`Processing subscription update for ${subscription.id}`);
 
   const { currentPeriodStart, currentPeriodEnd } =
     extractSubscriptionPeriod(subscription);
@@ -483,25 +489,57 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     console.warn(
       `No user found for subscription ${subscription.id}, customer: ${stripeCustomerId}`,
     );
-    // Still update the subscription if it exists, but log the warning
+    return;
   }
 
+  // Handle scheduled downgrades
+  if (subscription.metadata?.scheduledDowngrade === "true") {
+    const targetPlanId = subscription.metadata.planId;
+
+    // Update subscription with new plan
+    await prisma.subscription.updateMany({
+      where: { stripeSubscriptionId: subscription.id },
+      data: {
+        planId: targetPlanId,
+        status,
+        currentPeriodStart,
+        currentPeriodEnd,
+        meta: null, // Clear the scheduled downgrade metadata
+        updatedAt: new Date(),
+      },
+    });
+
+    console.log(
+      `Scheduled downgrade completed for subscription ${subscription.id}`,
+    );
+    return;
+  }
+
+  // Handle regular updates (upgrades, renewals, etc.)
   const updateData = {
+    planId: subscription.metadata?.planId,
     status,
     currentPeriodStart,
     currentPeriodEnd,
     updatedAt: new Date(),
   };
 
+  // If this is an upgrade, update the plan immediately
+  if (subscription.metadata?.upgradeFrom) {
+    updateData.planId = subscription.metadata.planId;
+    console.log(
+      `Upgrade processed: ${subscription.metadata.upgradeFrom} -> ${subscription.metadata.planId}`,
+    );
+  }
+
   const updated = await prisma.subscription.updateMany({
     where: { stripeSubscriptionId: subscription.id },
     data: updateData,
   });
 
-  // If no existing subscription was updated and we have a user, create a new one
   if (updated.count === 0 && user) {
+    // Create new subscription if none exists
     const planId = subscription.metadata?.planId || "";
-
     await prisma.subscription.create({
       data: {
         userId: user.id,
@@ -512,7 +550,6 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
         currentPeriodEnd,
       },
     });
-
     console.log(`New subscription created for user ${user.id}`);
   }
 
@@ -523,7 +560,6 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     updatedCount: updated.count,
   });
 }
-
 // Handle subscription deletion
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   console.log("Processing subscription deletion");
@@ -537,4 +573,54 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   });
 
   console.log(`Subscription ${subscription.id} marked as canceled`);
+}
+
+async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
+  console.log("Processing invoice.payment_failed");
+
+  const stripeCustomerId =
+    typeof invoice.customer === "string" ? invoice.customer : null;
+  const user = await findUserFromStripe(stripeCustomerId);
+
+  if (!user) {
+    console.warn(
+      `No user found for failed invoice ${invoice.id}, customer: ${stripeCustomerId}`,
+    );
+    return;
+  }
+
+  // Update subscription status to past due
+  const subscriptionId = (invoice as any).subscription;
+  if (subscriptionId) {
+    await prisma.subscription.updateMany({
+      where: { stripeSubscriptionId: subscriptionId },
+      data: {
+        status: SubscriptionStatus.PAST_DUE,
+        updatedAt: new Date(),
+      },
+    });
+
+    console.log(
+      `Subscription ${subscriptionId} marked as past due due to payment failure`,
+    );
+  }
+
+  // Create failed payment record
+  await prisma.payment.create({
+    data: {
+      userId: user.id,
+      amount: (invoice.amount_due || 0) / 100,
+      currency: invoice.currency || "usd",
+      provider: "stripe",
+      providerPaymentId: invoice.id,
+      status: SubscriptionStatus.FAILED,
+      meta: {
+        invoiceId: invoice.id,
+        amountDue: invoice.amount_due,
+        currency: invoice.currency,
+        subscriptionId: subscriptionId,
+        failureReason: "Payment failed",
+      },
+    },
+  });
 }

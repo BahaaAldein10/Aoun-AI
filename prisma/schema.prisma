@@ -47,6 +47,9 @@ enum SubscriptionStatus {
   CANCELED
   TRIALING
   UNPAID
+  FAILED
+  SUCCEEDED
+  PENDING
 }
 
 enum PaymentStatus {
@@ -307,7 +310,7 @@ model Payment {
   amount            Float
   currency          String
   provider          String
-  providerPaymentId String?
+  providerPaymentId String?       @unique
   status            PaymentStatus
   meta              Json?
   createdAt         DateTime      @default(now())
