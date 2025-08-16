@@ -1,7 +1,6 @@
-'use client';
+"use client";
 
 import { Button } from "@/components/ui/button";
-import { ArrowDown, ArrowUp, Check } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import Spinner from "./Spinner";
@@ -14,9 +13,7 @@ interface CheckoutButtonProps {
   popular?: boolean;
   disabled?: boolean;
   variant?: "default" | "outline" | "secondary";
-  isCurrentPlan?: boolean;
-  isUpgrade?: boolean;
-  isDowngrade?: boolean;
+  hasActivePaidSubscription: boolean;
 }
 
 export default function CheckoutButton({
@@ -27,14 +24,13 @@ export default function CheckoutButton({
   popular = false,
   disabled = false,
   variant = "default",
-  isCurrentPlan = false,
-  isUpgrade = false,
-  isDowngrade = false,
+  hasActivePaidSubscription,
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
 
   const handleCheckout = async () => {
-    if (disabled || isCurrentPlan) return;
+    // Do nothing if button is disabled or user is on current plan
+    if (disabled || hasActivePaidSubscription) return;
 
     setLoading(true);
 
@@ -54,14 +50,13 @@ export default function CheckoutButton({
       if (data.url) {
         // Redirect to Stripe Checkout for new subscriptions
         window.location.href = data.url;
-      } else if (data.message) {
-        // Handle upgrades/downgrades that don't require checkout
-        toast.success(data.message);
-
-        // Refresh the page to show updated subscription
+      } else {
+        // Show success message for free plan or immediate actions
+        toast.success(data.message || "Plan updated successfully!");
+        // Optionally reload the page to show updated state
         setTimeout(() => {
           window.location.reload();
-        }, 2000);
+        }, 1500);
       }
     } catch (error) {
       console.error("Checkout error:", error);
@@ -75,9 +70,6 @@ export default function CheckoutButton({
 
   const getButtonIcon = () => {
     if (loading) return <Spinner />;
-    if (isCurrentPlan) return <Check className="size-4" />;
-    if (isUpgrade) return <ArrowUp className="size-4" />;
-    if (isDowngrade) return <ArrowDown className="size-4" />;
     return null;
   };
 
@@ -87,9 +79,6 @@ export default function CheckoutButton({
   };
 
   const getButtonVariant = () => {
-    if (isCurrentPlan) return "secondary";
-    if (isUpgrade && popular) return "default";
-    if (isDowngrade) return "outline";
     return variant;
   };
 
@@ -98,7 +87,7 @@ export default function CheckoutButton({
       onClick={handleCheckout}
       disabled={disabled || loading}
       variant={getButtonVariant()}
-      className={`w-full ${popular && !isCurrentPlan ? "shadow-lg" : ""}`}
+      className={`w-full ${popular ? "shadow-lg" : ""} ${hasActivePaidSubscription ? "hidden" : ""}`}
       size="lg"
     >
       {getButtonIcon()}

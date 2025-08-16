@@ -12,27 +12,12 @@ import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
 import { Plan, SubscriptionStatus } from "@prisma/client";
-import { ArrowDown, ArrowUp, Check, Clock, Star } from "lucide-react";
+import { AlertTriangle, Check, Star } from "lucide-react";
 import type { Metadata } from "next";
 
 type Props = {
   params: Promise<{ lang: SupportedLang }>;
 };
-
-// Type for the subscription meta field
-interface SubscriptionMeta {
-  scheduledDowngrade?: {
-    targetPlanId: string;
-    effectiveDate: string;
-    scheduledAt: string;
-  };
-  lastUpgrade?: {
-    from: string;
-    to: string;
-    timestamp: string;
-  };
-  [key: string]: unknown;
-}
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { dict } = await getLangAndDict(params);
@@ -72,83 +57,46 @@ const PricingPage = async ({ params }: Props) => {
     orderBy: { priceAmount: "asc" },
   });
 
-  // Helper function to safely parse meta
-  const getSubscriptionMeta = (meta: unknown): SubscriptionMeta | null => {
-    if (!meta || typeof meta !== "object") return null;
-    return meta as SubscriptionMeta;
-  };
-
+  // Simplified button logic - only show buttons for free plan or if user has no active subscription
   const getButtonProps = (plan: Plan) => {
-    const isCurrentPlan = currentSubscription?.planId === plan.id;
     const isFree = plan.priceAmount === 0;
-    const currentPlanAmount = currentSubscription?.plan?.priceAmount || 0;
-    const targetPlanAmount = plan.priceAmount || 0;
-    const meta = getSubscriptionMeta(currentSubscription?.meta);
+    const hasActivePaidSubscription =
+      currentSubscription && currentSubscription.plan.name !== "FREE";
 
-    if (isCurrentPlan) {
-      // Check for scheduled downgrades
-      const scheduledDowngrade = meta?.scheduledDowngrade;
-      if (scheduledDowngrade) {
-        return {
-          text: `${t.currentPlan || "Current Plan"} (${t.downgradingOn || "Downgrading on"} ${new Date(scheduledDowngrade.effectiveDate).toLocaleDateString()})`,
-          disabled: true,
-          variant: "secondary" as const,
-          isCurrentPlan: true,
-        };
-      }
-
-      return {
-        text: t.currentPlan || "Current Plan",
-        disabled: true,
-        variant: "secondary" as const,
-        isCurrentPlan: true,
-      };
-    }
-
+    // Free plan - always accessible
     if (isFree) {
-      if (currentSubscription) {
-        return {
-          text: t.downgrade || "Downgrade",
-          disabled: false,
-          variant: "outline" as const,
-          isDowngrade: true,
-        };
-      }
       return {
-        text: t.getStarted || "Get Started",
+        text: t.getStarted,
         disabled: false,
-        variant: plan.popular ? ("default" as const) : ("outline" as const),
+        variant: "outline" as const,
+        isCurrentPlan: false,
+        showButton: true,
       };
     }
 
-    // Check if user is downgrading or upgrading
-    if (currentSubscription?.plan) {
-      if (targetPlanAmount > currentPlanAmount) {
-        return {
-          text: t.upgrade || "Upgrade",
-          disabled: false,
-          variant: plan.popular ? ("default" as const) : ("outline" as const),
-          isUpgrade: true,
-        };
-      } else if (targetPlanAmount < currentPlanAmount) {
-        return {
-          text: t.downgrade || "Downgrade",
-          disabled: false,
-          variant: "outline" as const,
-          isDowngrade: true,
-        };
-      }
+    // Paid plans - only show if user doesn't have an active paid subscription
+    if (hasActivePaidSubscription) {
+      return {
+        text: t.subscribe,
+        disabled: true,
+        variant: "outline" as const,
+        isCurrentPlan: false,
+        showButton: false, // Hide button for paid plans when user has active subscription
+      };
     }
 
+    // User has no subscription or only free - show subscribe button
     return {
-      text: t.subscribe || "Subscribe",
+      text: t.subscribe,
       disabled: false,
       variant: plan.popular ? ("default" as const) : ("outline" as const),
+      isCurrentPlan: false,
+      showButton: true,
     };
   };
 
-  const meta = getSubscriptionMeta(currentSubscription?.meta);
-  const hasScheduledDowngrade = meta?.scheduledDowngrade;
+  const hasActivePaidSubscription =
+    currentSubscription && currentSubscription.plan.name !== "FREE";
 
   return (
     <section className="py-16 md:py-24">
@@ -164,43 +112,20 @@ const PricingPage = async ({ params }: Props) => {
         {/* Show current plan info */}
         {currentSubscription && (
           <div className="mt-8 space-y-4">
-            <div className="bg-muted rounded-lg p-4">
-              <p className="text-muted-foreground text-sm">
-                {t.currentlyOn || "You're currently on"}:{" "}
-                <span className="text-foreground font-medium">
-                  {currentSubscription.plan.title}
-                </span>
-                {currentSubscription.currentPeriodEnd && (
-                  <span>
-                    {" "}
-                    - {t.renewsOn || "Renews on"}{" "}
+            {currentSubscription.currentPeriodEnd && (
+              <Alert>
+                <AlertDescription>
+                  <p className="inline-flex flex-wrap items-center gap-1">
+                    {t.currentlyOn}{" "}
+                    <span className="text-foreground font-medium">
+                      {currentSubscription.plan.title}
+                    </span>
+                    {" - "}
+                    {t.renewsOn}{" "}
                     {new Date(
                       currentSubscription.currentPeriodEnd,
                     ).toLocaleDateString()}
-                  </span>
-                )}
-              </p>
-            </div>
-
-            {/* Show scheduled downgrade alert */}
-            {hasScheduledDowngrade && (
-              <Alert>
-                <Clock className="h-4 w-4" />
-                <AlertDescription>
-                  {t.scheduledDowngrade || "You have a scheduled plan change."}
-                  Your plan will change to{" "}
-                  <strong>
-                    {
-                      plans.find(
-                        (p) => p.id === hasScheduledDowngrade.targetPlanId,
-                      )?.title
-                    }
-                  </strong>{" "}
-                  on{" "}
-                  {new Date(
-                    hasScheduledDowngrade.effectiveDate,
-                  ).toLocaleDateString()}
-                  .
+                  </p>
                 </AlertDescription>
               </Alert>
             )}
@@ -208,10 +133,8 @@ const PricingPage = async ({ params }: Props) => {
             {/* Show past due alert */}
             {currentSubscription.status === SubscriptionStatus.PAST_DUE && (
               <Alert variant="destructive">
-                <AlertDescription>
-                  {t.pastDueWarning ||
-                    "Your subscription payment is past due. Please update your payment method to continue using the service."}
-                </AlertDescription>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{t.pastDueWarning}</AlertDescription>
               </Alert>
             )}
           </div>
@@ -223,15 +146,6 @@ const PricingPage = async ({ params }: Props) => {
             {plans.map((plan) => {
               const buttonProps = getButtonProps(plan);
               const isCurrentPlan = currentSubscription?.planId === plan.id;
-              const currentPlanAmount =
-                currentSubscription?.plan?.priceAmount || 0;
-              const targetPlanAmount = plan.priceAmount || 0;
-              const isUpgrade =
-                currentSubscription && targetPlanAmount > currentPlanAmount;
-              const isDowngrade =
-                currentSubscription &&
-                targetPlanAmount < currentPlanAmount &&
-                targetPlanAmount >= 0;
 
               return (
                 <Card
@@ -247,28 +161,14 @@ const PricingPage = async ({ params }: Props) => {
                     <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
                       <div className="flex items-center gap-1 rounded-full bg-green-500 px-4 py-2 text-sm font-medium text-white">
                         <Check className="h-3 w-3" />
-                        {t.currentPlan || "Current Plan"}
+                        {t.currentPlan}
                       </div>
                     </div>
                   ) : plan.popular ? (
                     <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
                       <div className="bg-primary text-primary-foreground flex items-center gap-1 rounded-full px-4 py-2 text-sm font-medium">
                         <Star className="h-3 w-3" />
-                        {t.popularBadge || "Most Popular"}
-                      </div>
-                    </div>
-                  ) : isUpgrade ? (
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
-                      <div className="flex items-center gap-1 rounded-full bg-blue-500 px-4 py-2 text-sm font-medium text-white">
-                        <ArrowUp className="h-3 w-3" />
-                        {t.upgrade || "Upgrade"}
-                      </div>
-                    </div>
-                  ) : isDowngrade ? (
-                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 transform">
-                      <div className="flex items-center gap-1 rounded-full bg-orange-500 px-4 py-2 text-sm font-medium text-white">
-                        <ArrowDown className="h-3 w-3" />
-                        {t.downgrade || "Downgrade"}
+                        {t.popularBadge}
                       </div>
                     </div>
                   ) : null}
@@ -297,18 +197,18 @@ const PricingPage = async ({ params }: Props) => {
                   </CardContent>
 
                   <CardFooter>
-                    <CheckoutButton
-                      planId={plan.id}
-                      lang={lang}
-                      SubscribeText={buttonProps.text}
-                      RedirectingText={t.redirecting_button || "Redirecting..."}
-                      popular={plan.popular && !isCurrentPlan}
-                      disabled={buttonProps.disabled}
-                      variant={buttonProps.variant}
-                      isCurrentPlan={buttonProps.isCurrentPlan}
-                      isUpgrade={buttonProps.isUpgrade}
-                      isDowngrade={buttonProps.isDowngrade}
-                    />
+                    {buttonProps.showButton && (
+                      <CheckoutButton
+                        planId={plan.id}
+                        lang={lang}
+                        SubscribeText={buttonProps.text}
+                        RedirectingText={t.redirecting_button}
+                        popular={plan.popular && !isCurrentPlan}
+                        disabled={buttonProps.disabled}
+                        variant={buttonProps.variant}
+                        hasActivePaidSubscription={!!hasActivePaidSubscription}
+                      />
+                    )}
                   </CardFooter>
                 </Card>
               );

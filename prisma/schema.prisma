@@ -48,8 +48,6 @@ enum SubscriptionStatus {
   TRIALING
   UNPAID
   FAILED
-  SUCCEEDED
-  PENDING
 }
 
 enum PaymentStatus {

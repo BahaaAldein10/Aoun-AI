@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { prisma } from "@/lib/prisma";
-import { SubscriptionStatus } from "@prisma/client";
+import { PaymentStatus, SubscriptionStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 
@@ -44,7 +44,7 @@ function extractSubscriptionPeriod(subscription: Stripe.Subscription) {
   let currentPeriodStart: Date | null = null;
   let currentPeriodEnd: Date | null = null;
 
-  // Method 1: Check if subscription has current_period fields (some webhook events include them)
+  // Method 1: Check if subscription has current_period fields
   const subWithPeriod = subscription as any;
   if (subWithPeriod.current_period_start && subWithPeriod.current_period_end) {
     currentPeriodStart = new Date(subWithPeriod.current_period_start * 1000);
@@ -52,87 +52,39 @@ function extractSubscriptionPeriod(subscription: Stripe.Subscription) {
     return { currentPeriodStart, currentPeriodEnd };
   }
 
-  // Method 2: Calculate from billing_cycle_anchor and subscription items
-  if (subscription.billing_cycle_anchor && subscription.items?.data?.[0]) {
-    const billingAnchor = subscription.billing_cycle_anchor;
-    const item = subscription.items.data[0];
-
-    // Get the price interval from the subscription item
-    if (item.price?.recurring?.interval) {
-      const interval = item.price.recurring.interval;
-      const intervalCount = item.price.recurring.interval_count || 1;
-
-      // Calculate current period based on billing cycle anchor
-      const now = Math.floor(Date.now() / 1000);
-      let periodStart = billingAnchor;
-
-      // Find the current billing period
-      while (periodStart < now) {
-        const nextPeriod = calculateNextBillingDate(
-          periodStart,
-          interval,
-          intervalCount,
-        );
-        if (nextPeriod > now) break;
-        periodStart = nextPeriod;
-      }
-
-      currentPeriodStart = new Date(periodStart * 1000);
-      currentPeriodEnd = new Date(
-        calculateNextBillingDate(periodStart, interval, intervalCount) * 1000,
-      );
-    }
-  }
-
-  // Method 3: Fallback to start_date for new subscriptions
-  if (!currentPeriodStart && subscription.start_date) {
+  // Method 2: Fallback to start_date for new subscriptions
+  if (
+    subscription.start_date &&
+    subscription.items?.data?.[0]?.price?.recurring
+  ) {
     currentPeriodStart = new Date(subscription.start_date * 1000);
 
-    // Try to calculate end based on first item's price
-    if (subscription.items?.data?.[0]?.price?.recurring) {
-      const interval = subscription.items.data[0].price.recurring.interval;
-      const intervalCount =
-        subscription.items.data[0].price.recurring.interval_count || 1;
-      const startTimestamp = subscription.start_date;
-      const endTimestamp = calculateNextBillingDate(
-        startTimestamp,
-        interval,
-        intervalCount,
-      );
-      currentPeriodEnd = new Date(endTimestamp * 1000);
+    const interval = subscription.items.data[0].price.recurring.interval;
+    const intervalCount =
+      subscription.items.data[0].price.recurring.interval_count || 1;
+    const startDate = new Date(subscription.start_date * 1000);
+
+    switch (interval) {
+      case "day":
+        startDate.setDate(startDate.getDate() + intervalCount);
+        break;
+      case "week":
+        startDate.setDate(startDate.getDate() + intervalCount * 7);
+        break;
+      case "month":
+        startDate.setMonth(startDate.getMonth() + intervalCount);
+        break;
+      case "year":
+        startDate.setFullYear(startDate.getFullYear() + intervalCount);
+        break;
+      default:
+        startDate.setMonth(startDate.getMonth() + 1);
     }
+
+    currentPeriodEnd = startDate;
   }
 
   return { currentPeriodStart, currentPeriodEnd };
-}
-
-// Helper function to calculate next billing date
-function calculateNextBillingDate(
-  startTimestamp: number,
-  interval: string,
-  intervalCount: number,
-): number {
-  const startDate = new Date(startTimestamp * 1000);
-
-  switch (interval) {
-    case "day":
-      startDate.setDate(startDate.getDate() + intervalCount);
-      break;
-    case "week":
-      startDate.setDate(startDate.getDate() + intervalCount * 7);
-      break;
-    case "month":
-      startDate.setMonth(startDate.getMonth() + intervalCount);
-      break;
-    case "year":
-      startDate.setFullYear(startDate.getFullYear() + intervalCount);
-      break;
-    default:
-      // Default to 1 month if unknown interval
-      startDate.setMonth(startDate.getMonth() + 1);
-  }
-
-  return Math.floor(startDate.getTime() / 1000);
 }
 
 // Helper function to find user by customer ID or metadata
@@ -252,7 +204,6 @@ export async function POST(req: Request) {
         break;
       }
 
-      // Handle invoice payment failures for downgrades
       case "invoice.payment_failed": {
         await handleInvoicePaymentFailed(event.data.object as Stripe.Invoice);
         break;
@@ -292,7 +243,7 @@ async function handleCheckoutSessionCompleted(
     return;
   }
 
-  // Retrieve the full subscription object with expanded data to get period info
+  // Retrieve the full subscription object
   const subscription = await stripe.subscriptions.retrieve(
     stripeSubscriptionId,
     {
@@ -300,7 +251,7 @@ async function handleCheckoutSessionCompleted(
     },
   );
 
-  // First try to get period from the latest invoice if available
+  // Get period from the subscription
   let currentPeriodStart: Date | null = null;
   let currentPeriodEnd: Date | null = null;
 
@@ -310,7 +261,6 @@ async function handleCheckoutSessionCompleted(
         ? await stripe.invoices.retrieve(subscription.latest_invoice)
         : subscription.latest_invoice;
 
-    // Get period from invoice line items
     if (invoice.lines?.data?.[0]?.period) {
       const period = invoice.lines.data[0].period;
       currentPeriodStart = period.start ? new Date(period.start * 1000) : null;
@@ -318,7 +268,7 @@ async function handleCheckoutSessionCompleted(
     }
   }
 
-  // If we couldn't get period from invoice, try to extract from subscription
+  // Fallback to extracting from subscription
   if (!currentPeriodStart || !currentPeriodEnd) {
     const extracted = extractSubscriptionPeriod(subscription);
     currentPeriodStart = extracted.currentPeriodStart || currentPeriodStart;
@@ -342,6 +292,16 @@ async function handleCheckoutSessionCompleted(
   const planId =
     subscription.metadata?.planId || session.metadata?.planId || "";
   const status = mapStripeStatusToPrisma(subscription.status);
+
+  // Cancel any existing active subscriptions (should not happen with new logic, but safety check)
+  await prisma.subscription.updateMany({
+    where: {
+      userId: user.id,
+      status: { in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING] },
+      stripeSubscriptionId: { not: stripeSubscriptionId },
+    },
+    data: { status: SubscriptionStatus.CANCELED },
+  });
 
   // Create or update subscription
   await prisma.subscription.upsert({
@@ -401,10 +361,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
 
   // Create payment record
   const amount = (invoice.amount_paid || 0) / 100; // Convert from cents
-
-  // Access subscription field safely using type assertion
-  const invoiceWithSubscription = invoice as any;
-  const subscriptionId = invoiceWithSubscription.subscription || null;
+  const subscriptionId = (invoice as any).subscription || null;
 
   await prisma.payment.create({
     data: {
@@ -415,8 +372,8 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
       providerPaymentId: invoice.id,
       status:
         invoice.status === "paid"
-          ? SubscriptionStatus.SUCCEEDED
-          : SubscriptionStatus.PENDING,
+          ? PaymentStatus.SUCCEEDED
+          : PaymentStatus.PENDING,
       meta: {
         invoiceId: invoice.id,
         amountPaid: invoice.amount_paid,
@@ -449,7 +406,6 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
       updatedAt: new Date(),
     };
 
-    // Only update period if we have the data
     if (currentPeriodStart) updateData.currentPeriodStart = currentPeriodStart;
     if (currentPeriodEnd) updateData.currentPeriodEnd = currentPeriodEnd;
 
@@ -469,7 +425,7 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   console.log(`Payment recorded for user ${user.id}, amount: ${amount}`);
 }
 
-// Handle subscription updates
+// Handle subscription updates (renewals, etc.)
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   console.log(`Processing subscription update for ${subscription.id}`);
 
@@ -492,30 +448,6 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     return;
   }
 
-  // Handle scheduled downgrades
-  if (subscription.metadata?.scheduledDowngrade === "true") {
-    const targetPlanId = subscription.metadata.planId;
-
-    // Update subscription with new plan
-    await prisma.subscription.updateMany({
-      where: { stripeSubscriptionId: subscription.id },
-      data: {
-        planId: targetPlanId,
-        status,
-        currentPeriodStart,
-        currentPeriodEnd,
-        meta: null, // Clear the scheduled downgrade metadata
-        updatedAt: new Date(),
-      },
-    });
-
-    console.log(
-      `Scheduled downgrade completed for subscription ${subscription.id}`,
-    );
-    return;
-  }
-
-  // Handle regular updates (upgrades, renewals, etc.)
   const updateData = {
     planId: subscription.metadata?.planId,
     status,
@@ -523,14 +455,6 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     currentPeriodEnd,
     updatedAt: new Date(),
   };
-
-  // If this is an upgrade, update the plan immediately
-  if (subscription.metadata?.upgradeFrom) {
-    updateData.planId = subscription.metadata.planId;
-    console.log(
-      `Upgrade processed: ${subscription.metadata.upgradeFrom} -> ${subscription.metadata.planId}`,
-    );
-  }
 
   const updated = await prisma.subscription.updateMany({
     where: { stripeSubscriptionId: subscription.id },
@@ -560,6 +484,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     updatedCount: updated.count,
   });
 }
+
 // Handle subscription deletion
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   console.log("Processing subscription deletion");
@@ -575,6 +500,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   console.log(`Subscription ${subscription.id} marked as canceled`);
 }
 
+// Handle invoice payment failed
 async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
   console.log("Processing invoice.payment_failed");
 
@@ -613,7 +539,7 @@ async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
       currency: invoice.currency || "usd",
       provider: "stripe",
       providerPaymentId: invoice.id,
-      status: SubscriptionStatus.FAILED,
+      status: PaymentStatus.FAILED,
       meta: {
         invoiceId: invoice.id,
         amountDue: invoice.amount_due,

@@ -69,11 +69,14 @@
     "upgrade": "ترقية",
     "downgrade": "تخفيض الخطة",
     "subscribe": "اشترك",
+    "cancelSubscription": "إلغاء الاشتراك",
     "currentlyOn": "أنت مشترك حاليًا في",
     "renewsOn": "تتجدد في",
     "scheduledDowngrade": "لديك تغيير مجدول في الخطة.",
     "downgradingOn": "سيتم التخفيض في",
-    "pastDueWarning": "دفع اشتراكك متأخر. يرجى تحديث طريقة الدفع لمتابعة استخدام الخدمة."
+    "pastDueWarning": "دفع اشتراكك متأخر. يرجى تحديث طريقة الدفع لمتابعة استخدام الخدمة.",
+    "activeSubscriptionMessage": "لديك اشتراك نشط. لتغيير الخطة، يرجى إلغاء اشتراكك الحالي أولًا ثم الاشتراك في خطة جديدة.",
+    "contactToChangePlan": "تواصل مع الدعم لتغيير الخطة"
   },
   "footer": {
     "aboutTitle": "عون",

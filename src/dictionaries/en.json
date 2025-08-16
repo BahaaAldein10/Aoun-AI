@@ -69,11 +69,14 @@
     "upgrade": "Upgrade",
     "downgrade": "Downgrade",
     "subscribe": "Subscribe",
+    "cancelSubscription": "Cancel Subscription",
     "currentlyOn": "You're currently on",
     "renewsOn": "Renews on",
     "scheduledDowngrade": "You have a scheduled plan change.",
     "downgradingOn": "Downgrading on",
-    "pastDueWarning": "Your subscription payment is past due. Please update your payment method to continue using the service."
+    "pastDueWarning": "Your subscription payment is past due. Please update your payment method to continue using the service.",
+    "activeSubscriptionMessage": "You have an active subscription. To change plans, please cancel your current subscription first and then subscribe to a new plan.",
+    "contactToChangePlan": "Contact support to change plans"
   },
   "footer": {
     "aboutTitle": "Aoun",
