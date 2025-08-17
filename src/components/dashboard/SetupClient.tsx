@@ -69,9 +69,13 @@ const SetupClient = ({
   const [uploading, setUploading] = useState(false);
   const [url, setUrl] = useState("");
 
+  // NEW: states for ingestion
+  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
+  const [ingestStatus, setIngestStatus] = useState<string | null>(null);
+  const [ingestError, setIngestError] = useState<string | null>(null);
+  const [kbId, setKbId] = useState<string | null>(null);
+
   const t = dict.dashboard_setup;
-  // const [isCrawling, setIsCrawling] = useState(false);
-  // const [isTestingVoice, startVoiceTestTransition] = useTransition();
   const websiteDataRef = useRef<HTMLInputElement | null>(null);
 
   const form = useForm<SetupFormValues>({
@@ -100,7 +104,11 @@ const SetupClient = ({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) setFile(file);
+    if (file) {
+      setFile(file);
+    } else {
+      setFile(null);
+    }
   };
 
   const handleUpload = async () => {
@@ -109,7 +117,19 @@ const SetupClient = ({
       return;
     }
 
+    const MAX_SIZE_MB = 5;
+    const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+
+    if (file.size > MAX_SIZE_BYTES) {
+      alert(`File is too large! Please select a file under ${MAX_SIZE_MB} MB.`);
+      return;
+    }
+
     setUploading(true);
+    setIngestStatus(null);
+    setIngestError(null);
+    setUploadedFileId(null);
+    setKbId(null);
 
     try {
       // send file to our server route
@@ -138,8 +158,7 @@ const SetupClient = ({
 
       setUrl(downloadURL);
 
-      // Call your server action to persist file metadata to DB
-      // saveFileToDB is a Server Action (you already implemented it in your actions file)
+      // Call server action to persist file metadata to DB
       const result = await saveFileToDB({
         fileUrl: downloadURL,
         fileName: file.name,
@@ -148,12 +167,17 @@ const SetupClient = ({
         lang,
       });
 
-      if (!result?.success) {
+      if (!result?.success || !result.file?.id) {
         console.error("Failed to save file metadata:", result);
         toast.error("Uploaded but failed to save file info.");
-      } else {
-        toast.success("File uploaded and saved!");
+        setUploading(false);
+        return;
       }
+
+      // Store id and start status polling
+      setUploadedFileId(result.file.id);
+      toast.success("Upload saved. Ingestion will start shortly.");
+      setFile(null);
     } catch (err) {
       console.error("Upload failed", err);
       toast.error("Upload failed. See console for details.");
@@ -220,61 +244,7 @@ const SetupClient = ({
                   </TabsTrigger>
                 </TabsList>
 
-                {/* Tablet / Large phones: split into two rows of 2 (visible only when lg:hidden) */}
-                <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
-                  <TabsTrigger value="url" className="cursor-pointer">
-                    <LinkIcon className="mr-2" />
-                    {t.generate_from_url}
-                  </TabsTrigger>
-                  <TabsTrigger value="upload" className="cursor-pointer">
-                    <Upload className="mr-2" />
-                    {t.upload_documents}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
-                  <TabsTrigger value="manual" className="cursor-pointer">
-                    <FileText className="mr-2" />
-                    {t.manual_qa}
-                  </TabsTrigger>
-                  <TabsTrigger value="appearance" className="cursor-pointer">
-                    <Palette className="mr-2" />
-                    {t.appearance_tab}
-                  </TabsTrigger>
-                </TabsList>
-
-                {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
-                <TabsList className="grid w-full grid-cols-1 sm:hidden">
-                  <TabsTrigger value="url" className="cursor-pointer">
-                    <LinkIcon className="mr-2" />
-                    {t.generate_from_url}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-1 sm:hidden">
-                  <TabsTrigger value="upload" className="cursor-pointer">
-                    <Upload className="mr-2" />
-                    {t.upload_documents}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-1 sm:hidden">
-                  <TabsTrigger value="manual" className="cursor-pointer">
-                    <FileText className="mr-2" />
-                    {t.manual_qa}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-1 sm:hidden">
-                  <TabsTrigger value="appearance" className="cursor-pointer">
-                    <Palette className="mr-2" />
-                    {t.appearance_tab}
-                  </TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-1 sm:hidden">
-                  <TabsTrigger value="voice" className="cursor-pointer">
-                    <Wand2 className="mr-2" />
-                    {t.custom_voice_tab}
-                  </TabsTrigger>
-                </TabsList>
-
-                {/* URL Tab */}
+                {/* -- url tab -- */}
                 <TabsContent value="url" className="pt-6">
                   <div
                     className={cn(
@@ -338,16 +308,21 @@ const SetupClient = ({
                   </div>
                 </TabsContent>
 
-                {/* Upload Tab (UI only) */}
+                {/* -- upload tab -- */}
                 <TabsContent value="upload" className="pt-6">
                   <div className="rounded-lg border-2 border-dashed p-6 text-center">
                     <p className="text-muted-foreground mb-4">
                       {t.upload_desc}
                     </p>
-                    {/* File input */}
-                    <Input type="file" onChange={handleFileChange} />
-                    {/* Optional: show selected file name */}
+
+                    <Input
+                      type="file"
+                      accept=".pdf,.docx"
+                      onChange={handleFileChange}
+                      className="cursor-pointer"
+                    />
                     {file && <p className="mt-2 text-sm">{file.name}</p>}
+
                     <Button
                       type="button"
                       size="lg"
@@ -366,7 +341,56 @@ const SetupClient = ({
                         </>
                       )}
                     </Button>
-                    {/* optional: show resulting URL */}
+
+                    {/* INGESTION STATUS BANNER */}
+                    {uploadedFileId && (
+                      <div className="mt-4 text-left">
+                        {ingestStatus === "processing" ||
+                        ingestStatus === "pending" ? (
+                          <div className="rounded-md border bg-yellow-50 px-4 py-3">
+                            <strong>Ingestion in progress</strong>
+                            <div className="text-muted-foreground text-sm">
+                              We are extracting and processing the file. This
+                              may take a moment — we&apos;ll update this panel
+                              when finished.
+                            </div>
+                          </div>
+                        ) : ingestStatus === "done" ? (
+                          <div className="rounded-md border bg-green-50 px-4 py-3">
+                            <strong>Ingestion complete</strong>
+                            <div className="text-muted-foreground text-sm">
+                              Knowledge base created.
+                              {kbId && (
+                                <>
+                                  {" "}
+                                  <a
+                                    className="underline"
+                                    href={`/dashboard/kb/${kbId}`}
+                                  >
+                                    Open KB
+                                  </a>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ) : ingestStatus === "failed" ? (
+                          <div className="rounded-md border bg-red-50 px-4 py-3">
+                            <strong>Ingestion failed</strong>
+                            <div className="text-muted-foreground text-sm">
+                              {ingestError ?? "Something went wrong."}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-md border bg-gray-50 px-4 py-3">
+                            <strong>Waiting for ingestion</strong>
+                            <div className="text-muted-foreground text-sm">
+                              Queued — will start shortly.
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {url && (
                       <p className="mt-3 text-xs break-all">
                         Uploaded URL:{" "}
@@ -374,11 +398,11 @@ const SetupClient = ({
                           {url}
                         </a>
                       </p>
-                    )}{" "}
+                    )}
                   </div>
                 </TabsContent>
 
-                {/* Manual Q&A Tab */}
+                {/* -- manual / appearance / voice tabs unchanged -- */}
                 <TabsContent value="manual" className="pt-6">
                   <div className="space-y-4 rtl:text-right">
                     <CardHeader className="p-0">
