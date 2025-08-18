@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "outDir": "dist",
+    "rootDir": ".",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "lib": ["ES2020"],
+    "strict": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["workers/**/*", "src/workers/**/*", "lib/**/*"],
+  "exclude": ["node_modules", ".next", "dist"]
+}

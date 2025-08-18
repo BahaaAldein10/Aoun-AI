@@ -132,7 +132,7 @@ const SetupClient = ({
     setKbId(null);
 
     try {
-      // send file to our server route
+      // 1) Upload file to storage endpoint
       const fd = new FormData();
       fd.append("file", file);
 
@@ -156,9 +156,10 @@ const SetupClient = ({
         return;
       }
 
+      // Keep URL for UI
       setUrl(downloadURL);
 
-      // Call server action to persist file metadata to DB
+      // 2) Persist uploadedFile record in DB (server action)
       const result = await saveFileToDB({
         fileUrl: downloadURL,
         fileName: file.name,
@@ -170,12 +171,15 @@ const SetupClient = ({
       if (!result?.success || !result.file?.id) {
         console.error("Failed to save file metadata:", result);
         toast.error("Uploaded but failed to save file info.");
-        setUploading(false);
         return;
       }
 
-      // Store id and start status polling
+      // 3) Update UI to reflect enqueue/queued state
       setUploadedFileId(result.file.id);
+      setIngestStatus("queued"); // queued until worker picks it up
+      setIngestError(null);
+      setKbId(null);
+
       toast.success("Upload saved. Ingestion will start shortly.");
       setFile(null);
     } catch (err) {
@@ -188,9 +192,82 @@ const SetupClient = ({
 
   const handleTestVoice = () => {};
 
-  async function onSubmit() {
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    toast.success("Success");
+  async function onSubmit(values: SetupFormValues) {
+    // Ensure URL present
+    const url = values.url?.trim();
+    if (!url) {
+      toast.error("Please enter a valid URL to crawl.");
+      return;
+    }
+
+    // Reset local status for new ingestion
+    setIngestStatus(null);
+    setIngestError(null);
+    setKbId(null);
+
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url,
+          kbTitle: values.botName
+            ? `${values.botName} - ${new URL(url).hostname}`
+            : undefined,
+          pageLimit: 1,
+        }),
+      });
+
+      // try to parse json body
+      let body = null;
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+
+      if (!res.ok) {
+        // server returned an error
+        const errMsg = body?.error ?? `Server returned ${res.status}`;
+        setIngestStatus("failed");
+        setIngestError(errMsg);
+        toast.error(errMsg);
+        return;
+      }
+
+      // If server accepted and queued the job
+      if (res.status === 202) {
+        setIngestStatus("queued");
+        if (body?.kbId) setKbId(body.kbId);
+        toast.success(
+          body?.message ??
+            "Ingestion queued. We will notify you when it finishes.",
+        );
+        return;
+      }
+
+      // If server did the ingestion synchronously and returned success
+      if (body?.success) {
+        setIngestStatus("done");
+        if (body.kbId) setKbId(body.kbId);
+        const pages = body.pages ?? 0;
+        const chunks = body.chunks ?? 0;
+        toast.success(
+          `Ingestion complete — ${pages} page(s), ${chunks} chunk(s) created.`,
+        );
+        return;
+      }
+
+      // Fallback for unknown but OK response
+      setIngestStatus("done");
+      toast.success(body?.message ?? "Ingestion finished.");
+    } catch (err) {
+      console.error("ingest-url error:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setIngestStatus("failed");
+      setIngestError(msg);
+      toast.error("Ingestion failed. See console for details.");
+    }
   }
 
   const addFaq = () => append({ question: "", answer: "" });

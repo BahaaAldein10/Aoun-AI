@@ -77,15 +77,16 @@ export async function saveFileToDB({
 
     // Trigger ingest server-side (server action). We'll call our own /api/ingest route.
     try {
-      const res = await fetch("/api/ingest", {
+      // Use absolute URL when calling internal API from server runtime (safer)
+      const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      const res = await fetch(`${base}/api/ingest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // server-side request; safe to include internal keys in server route if needed
         body: JSON.stringify({ uploadedFileId: file.id }),
       });
 
       if (!res.ok) {
-        // mark failed and save error
+        // read text for better error info
         const errText = await res.text().catch(() => null);
         await prisma.uploadedFile.update({
           where: { id: file.id },
@@ -98,14 +99,16 @@ export async function saveFileToDB({
           },
         });
       } else {
-        // set processing (ingest route will set done when finished)
+        // queued successfully
+        const body = await res.json().catch(() => ({}));
         await prisma.uploadedFile.update({
           where: { id: file.id },
           data: {
             meta: {
               ...((file.meta as object) ?? {}),
-              ingestStatus: "processing",
-              processingStartedAt: new Date(),
+              ingestStatus: "queued",
+              queuedAt: new Date().toISOString(),
+              kbId: body.kbId ?? null,
             },
           },
         });

@@ -17,7 +17,7 @@ export const setupSchema = (dict: Dictionary) =>
     botName: z.string().min(2, {
       message: dict.dashboard_setup.bot_name_placeholder,
     }),
-    url: z.string().optional().nullable(),
+    url: z.url().optional().nullable(),
     personality: z.string().optional().nullable(),
     voice: z.string().optional(),
     primaryColor: z.string().optional(),
