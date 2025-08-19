@@ -3,16 +3,15 @@ import { CheckCircle } from "lucide-react";
 import Image from "next/image";
 
 const HowItWorksSection = ({
-  t,
+  howItWorksTitle,
+  steps,
   lang,
 }: {
-  t: {
-    howItWorksTitle: string;
-    steps: {
-      title: string;
-      text: string;
-    }[];
-  };
+  howItWorksTitle: string;
+  steps: {
+    title: string;
+    text: string;
+  }[];
   lang: string;
 }) => {
   return (
@@ -27,10 +26,8 @@ const HowItWorksSection = ({
           />
         </div>
         <div className="space-y-8 rtl:text-right">
-          <h2 className="text-3xl font-bold md:text-4xl">
-            {t.howItWorksTitle}
-          </h2>
-          {t.steps.map((step, index) => (
+          <h2 className="text-3xl font-bold md:text-4xl">{howItWorksTitle}</h2>
+          {steps.map((step, index) => (
             <div key={index} className="flex gap-4 rtl:space-x-reverse">
               <CheckCircle className="text-primary mt-1 h-8 w-8 shrink-0" />
               <div>

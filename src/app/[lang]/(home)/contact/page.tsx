@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getSiteContent } from "@/lib/actions/siteContent";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { Mail, MapPin, Phone } from "lucide-react";
 import type { Metadata } from "next";
@@ -17,18 +18,21 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 const ContactPage = async ({ params }: Props) => {
-  const { dict } = await getLangAndDict(params);
-  const t = dict.contact_page;
-  const f = dict.footer;
+  const { lang } = await getLangAndDict(params);
+
+  const contact = await getSiteContent({ lang }).then((res) => res?.contact);
+  const footer = await getSiteContent({ lang }).then((res) => res?.footer);
 
   return (
     <section className="py-16 md:py-24">
       <div className="container">
         <div className="mx-auto max-w-3xl text-center">
           <h1 className="text-4xl font-bold tracking-tighter md:text-5xl">
-            {t.title}
+            {contact?.title}
           </h1>
-          <p className="text-muted-foreground mt-4 text-lg">{t.subtitle}</p>
+          <p className="text-muted-foreground mt-4 text-lg">
+            {contact?.subtitle}
+          </p>
         </div>
 
         <div className="mx-auto mt-16 grid max-w-4xl gap-12 md:grid-cols-2">
@@ -36,17 +40,20 @@ const ContactPage = async ({ params }: Props) => {
             {/* Email Card */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 rtl:flex-row-reverse">
-                  <Mail className="text-primary h-5 w-5" /> {t.email_title}
+                <CardTitle className="flex items-center gap-2">
+                  <Mail className="text-primary h-5 w-5" />{" "}
+                  {contact?.emailCardTitle}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">{t.email_desc}</p>
+                <p className="text-muted-foreground">
+                  {contact?.emailCardDesc}
+                </p>
                 <a
-                  href={`mailto:${f.contactEmail}`}
+                  href={`mailto:${footer?.contactEmail}`}
                   className="text-primary text-lg font-semibold hover:underline"
                 >
-                  {f.contactEmail}
+                  {footer?.contactEmail}
                 </a>
               </CardContent>
             </Card>
@@ -54,25 +61,31 @@ const ContactPage = async ({ params }: Props) => {
             {/* Phone Card */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 rtl:flex-row-reverse">
-                  <Phone className="text-primary h-5 w-5" /> {t.phone_title}
+                <CardTitle className="flex items-center gap-2">
+                  <Phone className="text-primary h-5 w-5" />{" "}
+                  {contact?.phoneCardTitle}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">{t.phone_desc}</p>
-                <p className="text-lg font-semibold">{f.contactPhone}</p>
+                <p className="text-muted-foreground">
+                  {contact?.phoneCardDesc}
+                </p>
+                <p className="text-lg font-semibold">{footer?.contactPhone}</p>
               </CardContent>
             </Card>
 
             {/* Address Card */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 rtl:flex-row-reverse">
-                  <MapPin className="text-primary h-5 w-5" /> {t.address_title}
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="text-primary h-5 w-5" />{" "}
+                  {contact?.addressCardTitle}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">{f.contactAddress}</p>
+                <p className="text-muted-foreground">
+                  {footer?.contactAddress}
+                </p>
               </CardContent>
             </Card>
           </div>
@@ -80,8 +93,12 @@ const ContactPage = async ({ params }: Props) => {
           {/* Chat Widget Card */}
           <div>
             <Card className="p-8">
-              <h2 className="mb-4 text-2xl font-bold">{t.chat_title}</h2>
-              <p className="text-muted-foreground mb-6">{t.chat_desc}</p>
+              <h2 className="mb-4 text-2xl font-bold">
+                {contact?.chatCardTitle}
+              </h2>
+              <p className="text-muted-foreground mb-6">
+                {contact?.chatCardDesc}
+              </p>
               {/* <ChatWidget /> */}
             </Card>
           </div>

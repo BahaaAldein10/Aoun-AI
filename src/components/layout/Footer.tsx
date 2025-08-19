@@ -1,8 +1,9 @@
+import { getSiteContent } from "@/lib/actions/siteContent";
 import { getDictionary, SupportedLang } from "@/lib/dictionaries";
 import { Mail, MapPin, Phone } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { Icons } from "../shared/Icons";
-import Image from "next/image";
 
 const Footer = async ({
   params,
@@ -12,6 +13,8 @@ const Footer = async ({
   const { lang } = await params;
   const dict = await getDictionary(lang);
   const t = dict.footer;
+
+  const content = await getSiteContent({ lang }).then((res) => res?.footer);
 
   const quickLinks = [
     { href: `/${lang}`, text: t.linkHome },
@@ -38,12 +41,14 @@ const Footer = async ({
               <Image src="/images/logo.png" width={28} height={28} alt="Logo" />
               <span className="text-xl font-bold">{t.aboutTitle}</span>
             </Link>
-            <p className="text-muted-foreground text-sm">{t.aboutText}</p>
+            <p className="text-muted-foreground text-sm">
+              {content?.aboutText}
+            </p>
             <div className="flex gap-4 rtl:space-x-reverse">
-              {t.social?.facebook && (
+              {content?.social?.facebook && (
                 <Link
                   key="facebook"
-                  href={t.social.facebook}
+                  href={content?.social?.facebook}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
@@ -52,10 +57,10 @@ const Footer = async ({
                   <Icons.Facebook className="h-5 w-5" />
                 </Link>
               )}
-              {t.social?.twitter && (
+              {content?.social?.twitter && (
                 <Link
                   key="twitter"
-                  href={t.social.twitter}
+                  href={content?.social.twitter}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
@@ -64,10 +69,10 @@ const Footer = async ({
                   <Icons.Twitter className="h-5 w-5" />
                 </Link>
               )}
-              {t.social?.instagram && (
+              {content?.social?.instagram && (
                 <Link
                   key="instagram"
-                  href={t.social.instagram}
+                  href={content?.social.instagram}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-muted-foreground hover:text-primary"
@@ -116,16 +121,20 @@ const Footer = async ({
             <ul className="space-y-3">
               <li className="flex gap-2 space-x-reverse text-sm">
                 <Mail className="text-primary mt-1 h-4 w-4 shrink-0" />
-                <span className="text-muted-foreground">{t.contactEmail}</span>
+                <span className="text-muted-foreground">
+                  {content?.contactEmail}
+                </span>
               </li>
               <li className="flex gap-2 space-x-reverse text-sm">
                 <Phone className="text-primary mt-1 h-4 w-4 shrink-0" />
-                <span className="text-muted-foreground">{t.contactPhone}</span>
+                <span className="text-muted-foreground">
+                  {content?.contactPhone}
+                </span>
               </li>
               <li className="flex gap-2 space-x-reverse text-sm">
                 <MapPin className="text-primary mt-1 h-4 w-4 shrink-0" />
                 <span className="text-muted-foreground">
-                  {t.contactAddress}
+                  {content?.contactAddress}
                 </span>
               </li>
             </ul>
@@ -134,7 +143,7 @@ const Footer = async ({
 
         <div className="border-border/50 mt-12 flex flex-col items-center justify-between border-t pt-8 text-sm sm:flex-row">
           <p className="text-muted-foreground">
-            &copy; {new Date().getFullYear()} {t.copyright}
+            &copy; {new Date().getFullYear()} {content?.copyright}
           </p>
           <div className="mt-4 flex gap-4 sm:mt-0 rtl:space-x-reverse">
             <Link

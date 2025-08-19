@@ -650,6 +650,85 @@
     "previous_button": "Previous",
     "next_button": "Next"
   },
+  "admin_content": {
+    "title": "Content Management",
+    "description": "Edit website content for different languages.",
+
+    "save": "Save Changes",
+    "saving": "Saving...",
+    "save_success": "Content saved",
+    "save_failed": "Save failed",
+
+    "tabs": {
+      "en": "English",
+      "ar": "Arabic"
+    },
+
+    "sections": {
+      "hero": "Homepage - Hero Section",
+      "features": "Homepage - Features",
+      "how_it_works": "How It Works",
+      "testimonials": "Testimonials",
+      "contact": "Contact Page",
+      "faq": "FAQ",
+      "footer": "Footer"
+    },
+
+    "fields": {
+      "hero": {
+        "title": "Hero title",
+        "subtitle": "Hero subtitle",
+        "button1": "Button 1",
+        "button2": "Button 2"
+      },
+      "features": {
+        "title": "Features title",
+        "subtitle": "Features subtitle",
+        "feature": "Feature"
+      },
+      "how_it_works": {
+        "title": "How it works title",
+        "step_title": "Step {n} Title",
+        "step_text": "Step {n} Text"
+      },
+      "testimonials": {
+        "pill": "Pill text",
+        "title": "Testimonials title",
+        "subtitle": "Testimonials subtitle",
+        "item_text": "Testimonial {n} Text",
+        "name": "Name",
+        "job": "Title / Company"
+      },
+      "contact": {
+        "title": "Contact title",
+        "subtitle": "Contact subtitle",
+        "email_title": "Email card title",
+        "email_desc": "Email card description",
+        "phone_title": "Phone card title",
+        "phone_desc": "Phone card desc",
+        "address_title": "Address card title",
+        "chat_title": "Chat card title",
+        "chat_desc": "Chat card description",
+        "chat_button": "Chat button text"
+      },
+      "faq": {
+        "title": "FAQ title",
+        "subtitle": "FAQ subtitle",
+        "question": "Question {n}",
+        "answer": "Answer {n}"
+      },
+      "footer": {
+        "about": "About text",
+        "email": "Contact email",
+        "phone": "Contact phone",
+        "address": "Contact address",
+        "copyright": "Copyright",
+        "facebook": "Facebook URL",
+        "twitter": "Twitter URL",
+        "instagram": "Instagram URL"
+      }
+    }
+  },
   "admin_subscriptions": {
     "title": "Subscriptions",
     "description": "Manage customer subscriptions and billing status.",

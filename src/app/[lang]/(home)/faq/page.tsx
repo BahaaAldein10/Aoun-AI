@@ -4,6 +4,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { getSiteContent } from "@/lib/actions/siteContent";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import type { Metadata } from "next";
 
@@ -21,40 +22,35 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 const FAQPage = async ({ params }: Props) => {
-  const { dict } = await getLangAndDict(params);
-  const t = dict.faq_page;
+  const { lang } = await getLangAndDict(params);
 
-  const faqs = [
-    { question: t.q1, answer: t.a1 },
-    { question: t.q2, answer: t.a2 },
-    { question: t.q3, answer: t.a3 },
-    { question: t.q4, answer: t.a4 },
-    { question: t.q5, answer: t.a5 },
-    { question: t.q6, answer: t.a6 },
-  ];
+  const content = await getSiteContent({ lang }).then((res) => res?.faq);
 
   return (
     <section className="bg-secondary py-16 md:py-24">
       <div className="container">
         <div className="mx-auto max-w-3xl text-center rtl:text-right">
           <h1 className="text-4xl font-bold tracking-tighter md:text-5xl">
-            {t.title}
+            {content?.title}
           </h1>
-          <p className="text-muted-foreground mt-4 text-lg">{t.subtitle}</p>
+          <p className="text-muted-foreground mt-4 text-lg">
+            {content?.subtitle}
+          </p>
         </div>
 
         <div className="bg-background mx-auto mt-16 max-w-3xl rounded-xl p-8 shadow-lg rtl:text-right">
           <Accordion type="single" collapsible className="w-full">
-            {faqs.map((faq, index) => (
-              <AccordionItem key={index} value={`item-${index}`}>
-                <AccordionTrigger className="text-left text-lg rtl:text-right">
-                  {faq.question}
-                </AccordionTrigger>
-                <AccordionContent className="text-muted-foreground">
-                  {faq.answer}
-                </AccordionContent>
-              </AccordionItem>
-            ))}
+            {content?.items &&
+              content?.items.map((faq, index) => (
+                <AccordionItem key={index} value={`item-${index}`}>
+                  <AccordionTrigger className="text-left text-lg rtl:text-right">
+                    {faq.question}
+                  </AccordionTrigger>
+                  <AccordionContent className="text-muted-foreground">
+                    {faq.answer}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
           </Accordion>
         </div>
       </div>

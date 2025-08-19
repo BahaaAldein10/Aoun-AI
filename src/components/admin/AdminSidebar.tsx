@@ -26,6 +26,7 @@ import {
   FileText,
   Globe,
   LayoutDashboard,
+  Library,
   Link2,
   LogOut,
   Settings,
@@ -33,10 +34,9 @@ import {
 } from "lucide-react";
 import { User } from "next-auth";
 import { signOut } from "next-auth/react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Icons } from "../shared/Icons";
-import Image from "next/image";
 
 const AdminSidebar = ({
   lang,
@@ -71,6 +71,7 @@ const AdminSidebar = ({
     // Optional / later
     { href: "/admin/integrations", icon: Link2, label: t.integrations },
     // { href: "/admin/audit-logs", icon: ClipboardList, label: t.audit_logs },
+    { href: "/admin/content", icon: Library, label: t.content_management },
     { href: "/admin/blog", icon: BookOpen, label: t.blog_management },
     { href: "/admin/subscriptions", icon: CreditCard, label: t.subscriptions },
     { href: "/admin/pricing", icon: DollarSign, label: t.pricing },

@@ -341,6 +341,23 @@ model BlogPost {
 }
 
 /**
+ * Site content
+ */
+
+model SiteContent {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  lang      String
+  key       String? // e.g. "default" or "homepage"
+  content   Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([lang, key])
+  @@index([lang])
+}
+
+/**
  * Audit & logs
  */
 model AuditLog {
