@@ -240,7 +240,7 @@ export function DataTable<TData extends { status?: string }, TValue>({
               : "items"}
         </span>
 
-        <div>
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"

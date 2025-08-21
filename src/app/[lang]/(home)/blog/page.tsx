@@ -6,50 +6,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getBlogPosts } from "@/lib/actions/blog";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-
-const posts = [
-  {
-    slug: "how-to-build-a-portfolio",
-    title: "How to Build a Portfolio as a Developer",
-    excerpt:
-      "Learn how to showcase your skills and land freelance gigs with a strong portfolio.",
-    image: "/images/posts/portfolio.jpg",
-    date: "2025-08-01",
-    author: {
-      name: "John Doe",
-      avatar: "",
-    },
-  },
-  {
-    slug: "nextjs-vs-nuxt",
-    title: "Next.js vs Nuxt: Which One Should You Learn?",
-    excerpt:
-      "A comparison between Next.js and Nuxt.js to help you choose the right framework.",
-    image: "/images/posts/next-vs-nuxt.jpg",
-    date: "2025-07-20",
-    author: {
-      name: "Jane Smith",
-      avatar: "",
-    },
-  },
-  {
-    slug: "freelance-seo-tips",
-    title: "SEO Tips for Freelance Developers",
-    excerpt:
-      "Boost your personal site ranking with these practical SEO strategies tailored for developers.",
-    image: "/images/posts/seo-tips.jpg",
-    date: "2025-07-10",
-    author: {
-      name: "Ahmed Ali",
-      avatar: "",
-    },
-  },
-];
 
 type Props = {
   params: Promise<{ lang: SupportedLang }>;
@@ -68,12 +30,17 @@ const BlogPage = async ({ params }: Props) => {
   const { lang, dict } = await getLangAndDict(params);
   const t = dict.blog;
 
-  const [featuredPost, ...otherPosts] = posts;
+  const posts =
+    (await getBlogPosts())?.filter(
+      (post) => post.status === "PUBLISHED" && post.lang === lang,
+    ) ?? [];
+  const featuredPost = posts.filter((post) => post.featured)[0];
+  const otherPosts = posts.filter((post) => !post.featured);
 
   return (
     <section className="bg-background py-16 md:py-24">
       <div className="container">
-        {posts.length > 0 ? (
+        {posts && posts.length > 0 ? (
           <>
             {/* Page Heading */}
             <div className="mx-auto mb-16 max-w-3xl text-center">
@@ -92,7 +59,7 @@ const BlogPage = async ({ params }: Props) => {
                 <Card className="grid overflow-hidden transition-all hover:-translate-y-1 hover:shadow-2xl md:grid-cols-2">
                   <div className="relative h-64 md:h-auto">
                     <Image
-                      src="/images/how-it-works.png"
+                      src={featuredPost.coverImage || "/images/placeholder.png"}
                       alt={featuredPost.title}
                       fill
                       className="object-cover transition-transform group-hover:scale-105"
@@ -111,11 +78,13 @@ const BlogPage = async ({ params }: Props) => {
                     <div className="flex items-center gap-4">
                       <Avatar>
                         <AvatarImage
-                          src={featuredPost.author.avatar}
-                          alt={featuredPost.author.name}
+                          src={
+                            featuredPost.author.image ?? "/images/avatar.png"
+                          }
+                          alt={featuredPost.author.name ?? "Unknown Author"}
                         />
                         <AvatarFallback>
-                          {featuredPost.author.name.charAt(0)}
+                          {featuredPost.author?.name?.charAt(0)}
                         </AvatarFallback>
                       </Avatar>
                       <div>
@@ -123,7 +92,7 @@ const BlogPage = async ({ params }: Props) => {
                           {featuredPost.author.name}
                         </p>
                         <p className="text-muted-foreground text-sm">
-                          {featuredPost.date}
+                          {featuredPost.createdAt}
                         </p>
                       </div>
                     </div>
@@ -143,7 +112,7 @@ const BlogPage = async ({ params }: Props) => {
                   <Card className="flex h-full flex-col overflow-hidden transition-all hover:-translate-y-1 hover:shadow-2xl">
                     <div className="relative h-48">
                       <Image
-                        src="/images/how-it-works.png"
+                        src={post.coverImage || "/images/placeholder.png"}
                         alt={post.title}
                         fill
                         className="object-cover transition-transform group-hover:scale-105"
@@ -159,11 +128,11 @@ const BlogPage = async ({ params }: Props) => {
                       <div className="flex items-center gap-3">
                         <Avatar className="h-8 w-8">
                           <AvatarImage
-                            src={post.author.avatar}
-                            alt={post.author.name}
+                            src={post.author.image ?? "/images/avatar.png"}
+                            alt={post.author.name ?? "Unknown Author"}
                           />
                           <AvatarFallback>
-                            {post.author.name.charAt(0)}
+                            {(post.author.name as string).charAt(0)}
                           </AvatarFallback>
                         </Avatar>
                         <div>
@@ -171,7 +140,7 @@ const BlogPage = async ({ params }: Props) => {
                             {post.author.name}
                           </p>
                           <p className="text-muted-foreground text-xs">
-                            {post.date}
+                            {post.createdAt}
                           </p>
                         </div>
                       </div>
@@ -190,13 +159,13 @@ const BlogPage = async ({ params }: Props) => {
             </div>
           </>
         ) : (
-          <div className="py-12 text-center">
+          <div className="rounded-2xl py-12 text-center">
             <Image
-              src="/images/empty-state.svg"
+              src="/images/placeholder.png"
               alt="No posts"
               width={200}
               height={200}
-              className="mx-auto mb-6"
+              className="mx-auto mb-6 rounded-2xl"
             />
             <h2 className="mb-2 text-2xl font-semibold">{t.no_posts_title}</h2>
             <p className="text-muted-foreground">{t.no_posts_description}</p>

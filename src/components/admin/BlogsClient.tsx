@@ -8,27 +8,31 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/data-table"; // adjust path if needed
+import { DataTable } from "@/components/ui/data-table";
 import type { Dictionary } from "@/contexts/dictionary-context";
+import { deleteBlogPost } from "@/lib/actions/blog";
 import type { SupportedLang } from "@/lib/dictionaries";
 import { Table } from "@tanstack/react-table";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { columns as makeColumns, PostRow } from "./BlogsColumns";
+import Swal from "sweetalert2";
+import { BlogPostWithAuthor, columns as makeColumns } from "./BlogsColumns";
 
 const BlogsClient = ({
   initialPosts = [],
   lang,
   dict,
 }: {
-  initialPosts?: PostRow[];
+  initialPosts: BlogPostWithAuthor[];
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
-  const [tableInstance, setTableInstance] = useState<Table<PostRow> | null>(
-    null,
-  );
-  const [rows, setRows] = useState<PostRow[]>(initialPosts ?? []);
+  const [tableInstance, setTableInstance] =
+    useState<Table<BlogPostWithAuthor> | null>(null);
+  const [rows, setRows] = useState<BlogPostWithAuthor[]>(initialPosts ?? []);
+
+  const router = useRouter();
 
   const t: Record<string, string> = dict.admin_blogs;
   const locale = lang === "ar" ? "ar" : "en-US";
@@ -41,8 +45,9 @@ const BlogsClient = ({
 
     const header = [
       t.th_title,
-      t.th_slug,
       t.th_author,
+      t.th_lang || "Language",
+      t.th_featured || "Featured",
       t.th_status,
       t.th_created_at,
     ];
@@ -51,8 +56,9 @@ const BlogsClient = ({
     for (const r of dataToExport) {
       const line = [
         r.title,
-        r.slug,
-        r.authorName ?? "",
+        r.author.name ?? "",
+        r.lang === "en" ? "English" : "Arabic",
+        r.featured ? t.featured_yes : t.featured_no,
         r.status,
         r.createdAt ? new Date(r.createdAt).toLocaleString(locale) : "",
       ].map((v) => `"${String(v).replace(/"/g, '""')}"`);
@@ -65,24 +71,51 @@ const BlogsClient = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `aoun-posts-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `blog-posts-${lang}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success(t.toast_exported);
   }
 
   function handleCreate() {
-    toast.success(t.toast_create_placeholder);
+    router.push(`/${lang}/admin/blog/add`);
   }
 
-  function handleEdit(id: string) {
-    toast.success(t.toast_edit_placeholder?.replace("{id}", id) ?? "Edit");
+  function handleView(slug: string, lang: string) {
+    router.push(`/${lang}/blog/${slug}`);
   }
 
-  function handleDelete(id: string) {
-    if (!confirm(t.confirm_delete)) return;
-    setRows((prev) => prev.filter((p) => p.id !== id));
-    toast.success(t.toast_deleted);
+  function handleEdit(slug: string, lang: string) {
+    router.push(`/${lang}/admin/blog/edit/${slug}`);
+  }
+
+  async function handleDelete(id: string) {
+    const post = initialPosts.find((post) => post.id === id);
+    const post_title = post?.title;
+
+    const result = await Swal.fire({
+      title: t.confirm_title,
+      text: `${t.confirm_delete} "${post_title}"?`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: t.delete,
+      cancelButtonText: t.cancel,
+      focusCancel: true, // 👈 ensures Cancel is focused by default
+      reverseButtons: true, // 👈 places Cancel on the left, safer UX
+      confirmButtonColor: "#d33",
+      cancelButtonColor: "#3085d6",
+    });
+
+    if (result.isConfirmed) {
+      try {
+        await deleteBlogPost({ id, lang });
+        setRows((prev) => prev.filter((p) => p.id !== id));
+        toast.success(t.toast_deleted);
+      } catch (error) {
+        console.error("Delete failed:", error);
+        toast.error(t.toast_delete_failed);
+      }
+    }
   }
 
   return (
@@ -94,7 +127,9 @@ const BlogsClient = ({
         </div>
 
         <div className="flex gap-2">
-          <Button onClick={downloadCsv}>{t.export_csv}</Button>
+          <Button onClick={downloadCsv} variant="outline">
+            {t.export_csv}
+          </Button>
           <Button onClick={handleCreate}>{t.create_post}</Button>
         </div>
       </div>
@@ -111,7 +146,7 @@ const BlogsClient = ({
               t,
               lang,
               locale,
-              onView: (id: string) => toast(t.view_post_placeholder ?? "View"),
+              onView: handleView,
               onEdit: handleEdit,
               onDelete: handleDelete,
             })}
@@ -123,7 +158,7 @@ const BlogsClient = ({
             nextButton={t.next_button}
             onTableReady={setTableInstance}
             initialPageSize={20}
-            getStatus={(r: PostRow) => r.status ?? "draft"}
+            getStatus={(r) => r.status}
           />
         </CardContent>
       </Card>

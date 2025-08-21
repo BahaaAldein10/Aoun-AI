@@ -60,7 +60,6 @@ enum PaymentStatus {
 enum BlogStatus {
   DRAFT
   PUBLISHED
-  ARCHIVED
 }
 
 enum PlanName {
@@ -322,38 +321,38 @@ model Payment {
  * Blog management
  */
 model BlogPost {
-  id          String     @id @default(auto()) @map("_id") @db.ObjectId
-  title       String
-  slug        String     @unique
-  excerpt     String?
-  content     String
-  status      BlogStatus @default(DRAFT)
-  authorId    String     @db.ObjectId
-  tags        Json?
-  coverImage  String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-  publishedAt DateTime?
+  id      String  @id @default(auto()) @map("_id") @db.ObjectId
+  slug    String  @unique
+  title   String
+  excerpt String?
+  content String
 
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  lang       String
+  status     BlogStatus @default(DRAFT)
+  featured   Boolean    @default(false)
+  authorId   String     @db.ObjectId
+  coverImage String?
 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author User @relation(fields: [authorId], references: [id])
+
+  @@unique([slug, lang])
   @@index([authorId])
 }
 
 /**
  * Site content
  */
-
 model SiteContent {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  lang      String
-  key       String? // e.g. "default" or "homepage"
-  content   Json
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  lang    String
+  content Json
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([lang, key])
   @@index([lang])
 }
 
