@@ -15,33 +15,19 @@ import { Table } from "@tanstack/react-table";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import { DataTable } from "../ui/data-table";
-import { columns } from "./SubscriptionsColumns";
-
-type SubscriptionRow = {
-  id: string;
-  userId: string;
-  userName?: string | null;
-  userEmail?: string | null;
-  plan: string;
-  price: number | string;
-  currency?: string | null;
-  billingCycle: "monthly" | "yearly";
-  status: "active" | "past_due" | "canceled" | "trialing" | string;
-  startedAt: string | Date | null;
-  expiresAt?: string | Date | null;
-};
+import { columns, SubscriptionWithUserWithPlan } from "./SubscriptionsColumns";
 
 const SubscriptionsClient = ({
   initialSubscriptions,
   lang,
   dict,
 }: {
-  initialSubscriptions: SubscriptionRow[];
+  initialSubscriptions: SubscriptionWithUserWithPlan[];
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
   const [tableInstance, setTableInstance] =
-    useState<Table<SubscriptionRow> | null>(null);
+    useState<Table<SubscriptionWithUserWithPlan> | null>(null);
 
   const t = dict.admin_subscriptions;
   const locale = lang === "ar" ? "ar" : "en-US";
@@ -67,15 +53,23 @@ const SubscriptionsClient = ({
     const csvRows = [header.join(",")];
 
     for (const s of dataToExport) {
+      const planName = s.plan?.name ?? "";
+      const planPrice = s.plan?.priceAmount ?? 0;
+      const planInterval = s.plan?.interval ?? "";
+
       const line = [
         s.id,
-        `${s.userName ?? ""} <${s.userEmail ?? ""}>`,
-        s.plan,
-        `${s.price} ${s.currency}`,
-        s.billingCycle,
-        s.status,
-        s.startedAt ? new Date(s.startedAt).toLocaleString(locale) : "",
-        s.expiresAt ? new Date(s.expiresAt).toLocaleString(locale) : "",
+        `${s.user?.name ?? ""} <${s.user?.email ?? ""}>`,
+        planName,
+        planPrice ? `${planPrice} USD` : "",
+        planInterval,
+        s.status ?? "",
+        s.currentPeriodStart
+          ? new Date(s.currentPeriodStart).toLocaleString(locale)
+          : "",
+        s.currentPeriodEnd
+          ? new Date(s.currentPeriodEnd).toLocaleString(locale)
+          : "",
       ].map((v) => `"${String(v).replace(/"/g, '""')}"`);
       csvRows.push(line.join(","));
     }
@@ -90,16 +84,6 @@ const SubscriptionsClient = ({
     a.click();
     URL.revokeObjectURL(url);
     toast.success(t.toast_exported);
-  }
-
-  function handleChangePlan(id: string) {
-    toast.success(t.toast_change_plan_placeholder);
-    // wire real action later
-  }
-
-  function handleCancel(id: string) {
-    if (!confirm(t.confirm_cancel)) return;
-    toast.success(t.toast_canceled);
   }
 
   return (
@@ -120,13 +104,7 @@ const SubscriptionsClient = ({
         </CardHeader>
         <CardContent>
           <DataTable
-            columns={columns({
-              t,
-              lang,
-              locale,
-              onChangePlan: handleChangePlan,
-              onCancel: handleCancel,
-            })}
+            columns={columns({ t, locale })}
             data={initialSubscriptions}
             lang={lang}
             emptyMessage={t.empty}

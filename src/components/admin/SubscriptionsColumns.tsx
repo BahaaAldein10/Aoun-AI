@@ -2,57 +2,29 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { SupportedLang } from "@/lib/dictionaries";
+import { PlanName, Subscription, SubscriptionStatus } from "@prisma/client";
 import { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, MoreHorizontal } from "lucide-react";
-import toast from "react-hot-toast";
+import { ArrowUpDown } from "lucide-react";
+import { Avatar, AvatarImage } from "../ui/avatar";
 
-export type Subscription = {
-  id: string;
-  userId: string;
-  userName?: string | null;
-  userEmail?: string | null;
-  plan: string;
-  price: number | string;
-  currency?: string | null;
-  billingCycle: "monthly" | "yearly";
-  status: "active" | "past_due" | "canceled" | "trialing" | string;
-  startedAt: string | Date | null;
-  expiresAt?: string | Date | null;
+export type SubscriptionWithUserWithPlan = Subscription & {
+  user: { name: string; email: string; image: string };
+  plan: { name: PlanName; priceAmount: number; interval: string };
 };
 
 interface ColumnsProps {
   t: Record<string, string>;
-  lang: SupportedLang;
   locale: string;
-  onChangePlan: (id: string) => void;
-  onCancel: (id: string) => void;
 }
 
 export function columns({
   t,
-  lang,
   locale,
-  onChangePlan,
-  onCancel,
-}: ColumnsProps): ColumnDef<Subscription>[] {
+}: ColumnsProps): ColumnDef<SubscriptionWithUserWithPlan>[] {
   return [
     {
-      accessorKey: "id",
-      header: t.th_subscription_id,
-      cell: ({ row }) => (
-        <div className="font-medium">{row.getValue("id")}</div>
-      ),
-    },
-    {
       id: "user",
-      accessorFn: (row) => `${row.userName ?? ""} ${row.userEmail ?? ""}`,
+      accessorFn: (row) => `${row.user.name ?? ""} ${row.user.email ?? ""}`,
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_user}
@@ -60,26 +32,39 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => (
-        <div>
-          <div className="font-medium">{row.original.userName}</div>
-          <div className="text-muted-foreground text-xs">
-            {row.original.userEmail}
+        <div className="flex items-center gap-3">
+          <Avatar className="h-8 w-8">
+            <AvatarImage
+              src={row.original.user.image ?? "/images/avatar.png"}
+              alt={row.original.user.name ?? "User"}
+            />
+          </Avatar>
+          <div>
+            <div className="font-medium">{row.original.user.name ?? "—"}</div>
+            <div className="text-muted-foreground text-xs">
+              {row.original.user.email ?? "—"}
+            </div>
           </div>
         </div>
       ),
       enableGlobalFilter: true,
     },
     {
-      accessorKey: "plan",
+      id: "plan",
+      accessorFn: (row) => row.plan?.name ?? "—",
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_plan}
           <ArrowUpDown className="ml-2 h-4 w-4" />
         </Button>
       ),
+      cell: ({ row }) => (
+        <div className="font-medium">{row.original.plan?.name ?? "—"}</div>
+      ),
+      filterFn: "equalsString",
     },
     {
-      accessorKey: "price",
+      id: "price",
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_price}
@@ -87,9 +72,9 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => {
-        const raw = row.original.price;
-        const amount = Number(raw ?? 0);
-        const currency = row.original.currency ?? "USD";
+        const raw = row.original.plan?.priceAmount ?? 0;
+        const amount = Number(raw) || 0;
+        const currency = "USD";
         try {
           return new Intl.NumberFormat(locale, {
             style: "currency",
@@ -102,12 +87,16 @@ export function columns({
       },
     },
     {
-      accessorKey: "billingCycle",
+      id: "interval",
+      accessorFn: (row) => row.plan.interval ?? "—",
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_cycle}
           <ArrowUpDown className="ml-2 h-4 w-4" />
         </Button>
+      ),
+      cell: ({ row }) => (
+        <div className="font-medium">{row.original.plan?.interval ?? "—"}</div>
       ),
     },
     {
@@ -115,17 +104,22 @@ export function columns({
       header: t.th_status,
       cell: ({ row }) => {
         const status = String(row.getValue("status") ?? "");
+        const statusVariantMap: Record<
+          SubscriptionStatus,
+          "default" | "secondary" | "destructive" | "outline"
+        > = {
+          ACTIVE: "default",
+          TRIALING: "secondary",
+          PAST_DUE: "destructive",
+          CANCELED: "outline",
+          UNPAID: "destructive",
+          FAILED: "destructive",
+        };
+
         return (
           <Badge
-            variant={
-              status === "active"
-                ? "default"
-                : status === "trialing"
-                  ? "secondary"
-                  : status === "past_due"
-                    ? "destructive"
-                    : "outline"
-            }
+            variant={statusVariantMap[status as SubscriptionStatus]}
+            className="capitalize"
           >
             {t[`status_${status}`] ?? status}
           </Badge>
@@ -134,7 +128,7 @@ export function columns({
       filterFn: "equalsString",
     },
     {
-      accessorKey: "startedAt",
+      accessorKey: "currentPeriodStart",
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_started_at}
@@ -142,7 +136,7 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => {
-        const raw = row.getValue("startedAt") as string | Date | null;
+        const raw = row.getValue("currentPeriodStart") as string | Date | null;
         const date = raw ? new Date(raw) : null;
         return date && !isNaN(date.getTime())
           ? date.toLocaleString(locale)
@@ -150,7 +144,7 @@ export function columns({
       },
     },
     {
-      accessorKey: "expiresAt",
+      accessorKey: "currentPeriodEnd",
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_expires_at}
@@ -158,49 +152,11 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => {
-        const raw = row.getValue("expiresAt") as string | Date | null;
+        const raw = row.getValue("currentPeriodEnd") as string | Date | null;
         const date = raw ? new Date(raw) : null;
         return date && !isNaN(date.getTime())
           ? date.toLocaleString(locale)
           : "—";
-      },
-    },
-    {
-      id: "actions",
-      header: "",
-      cell: ({ row }) => {
-        const subscription = row.original;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">
-                  {lang === "ar" ? "فتح القائمة" : "Open menu"}
-                </span>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align={lang === "ar" ? "start" : "end"}>
-              <DropdownMenuItem onClick={() => onChangePlan(subscription.id)}>
-                {t.change_plan_button}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  navigator.clipboard.writeText(subscription.id);
-                  toast.success(t.toast_copied);
-                }}
-              >
-                {t.copy_button}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onCancel(subscription.id)}
-                className="text-destructive"
-              >
-                {t.cancel_button}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
       },
     },
   ];
