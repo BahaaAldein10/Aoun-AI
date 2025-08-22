@@ -13,3 +13,17 @@ export const settingsSchema = (dict: Dictionary) =>
   });
 
 export type SettingsFormValues = z.infer<ReturnType<typeof settingsSchema>>;
+
+export const editUserSchema = z.object({
+  name: z.string().optional(),
+  email: z.email().optional(),
+  role: z.enum(["USER", "ADMIN"], "Role is required").optional(),
+  minutes: z
+    .number({ error: "Minutes must be a number" })
+    .min(0, "Minutes cannot be negative")
+    .max(999999, "Minutes cannot exceed 999,999")
+    .int("Minutes must be a whole number")
+    .optional(),
+});
+
+export type EditUserFormValues = z.infer<typeof editUserSchema>;

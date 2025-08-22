@@ -112,6 +112,8 @@ const SubscriptionsClient = ({
             previousButton={t.previous_button}
             nextButton={t.next_button}
             onTableReady={setTableInstance}
+            showStatusFilter={true}
+            getStatus={(s) => s.status}
           />
         </CardContent>
       </Card>

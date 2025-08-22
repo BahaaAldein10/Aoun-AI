@@ -158,6 +158,7 @@ const BlogsClient = ({
             nextButton={t.next_button}
             onTableReady={setTableInstance}
             initialPageSize={20}
+            showStatusFilter = {true}
             getStatus={(r) => r.status}
           />
         </CardContent>

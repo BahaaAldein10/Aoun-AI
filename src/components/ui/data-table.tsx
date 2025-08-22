@@ -41,7 +41,7 @@ function useDebounce<T>(value: T, ms = 250) {
   return debounced;
 }
 
-interface DataTableProps<TData extends { status?: string }, TValue> {
+interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   lang: SupportedLang;
@@ -52,9 +52,10 @@ interface DataTableProps<TData extends { status?: string }, TValue> {
   initialPageSize?: number;
   getStatus?: (row: TData) => string | undefined;
   onTableReady?: (table: TableType<TData>) => void;
+  showStatusFilter?: boolean;
 }
 
-export function DataTable<TData extends { status?: string }, TValue>({
+export function DataTable<TData, TValue>({
   columns,
   data,
   lang,
@@ -65,6 +66,7 @@ export function DataTable<TData extends { status?: string }, TValue>({
   initialPageSize = 20,
   getStatus,
   onTableReady,
+  showStatusFilter = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [pagination, setPagination] = useState({
@@ -109,18 +111,19 @@ export function DataTable<TData extends { status?: string }, TValue>({
 
   // derive status options from data (works with different shapes)
   const statusOptions = useMemo(() => {
+    if (!showStatusFilter || !getStatus) return [];
+
     const set = new Set<string>();
-    const extractor = getStatus ?? ((r) => r?.status);
     memoData.forEach((row) => {
       try {
-        const s = extractor(row as TData);
+        const s = getStatus(row);
         if (s !== undefined && s !== null) set.add(String(s));
       } catch {
         // ignore extraction errors
       }
     });
     return Array.from(set).sort();
-  }, [memoData, getStatus]);
+  }, [memoData, getStatus, showStatusFilter]);
 
   // local handler to wire Select -> TanStack column filter
   const handleStatusChange = useCallback(
@@ -160,29 +163,31 @@ export function DataTable<TData extends { status?: string }, TValue>({
           className="max-w-sm"
         />
 
-        <Select
-          value={
-            currentStatusFilter != null ? String(currentStatusFilter) : "all"
-          }
-          onValueChange={(v) => handleStatusChange(v)}
-        >
-          <SelectTrigger
-            className="min-w-[120px]"
-            dir={lang === "ar" ? "rtl" : "ltr"}
+        {showStatusFilter && statusOptions.length > 0 && (
+          <Select
+            value={
+              currentStatusFilter != null ? String(currentStatusFilter) : "all"
+            }
+            onValueChange={(v) => handleStatusChange(v)}
           >
-            <SelectValue placeholder={lang === "ar" ? "الحالة" : "Status"} />
-          </SelectTrigger>
-          <SelectContent dir={lang === "ar" ? "rtl" : "ltr"}>
-            <SelectItem value="all">
-              {lang === "ar" ? "الكل" : "All"}
-            </SelectItem>
-            {statusOptions.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
+            <SelectTrigger
+              className="min-w-[120px]"
+              dir={lang === "ar" ? "rtl" : "ltr"}
+            >
+              <SelectValue placeholder={lang === "ar" ? "الحالة" : "Status"} />
+            </SelectTrigger>
+            <SelectContent dir={lang === "ar" ? "rtl" : "ltr"}>
+              <SelectItem value="all">
+                {lang === "ar" ? "الكل" : "All"}
               </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+              {statusOptions.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       <Table className="min-w-max">
