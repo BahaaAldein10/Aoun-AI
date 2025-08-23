@@ -265,9 +265,10 @@ model Integration {
  */
 model Plan {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  name            PlanName @unique
+  name            PlanName
   title           String
   description     String?
+  lang            String
   price           String // human readable e.g. "$19 / month"
   priceAmount     Int? // integer cents (e.g. 1900)
   interval        String? // "month" | "year" (optional)
@@ -279,6 +280,8 @@ model Plan {
   createdAt       DateTime @default(now())
 
   subscriptions Subscription[]
+
+  @@unique([name, lang])
 }
 
 model Subscription {

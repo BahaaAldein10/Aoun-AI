@@ -10,48 +10,46 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { Dictionary } from "@/contexts/dictionary-context";
+import { togglePlanPopular } from "@/lib/actions/plan";
 import type { SupportedLang } from "@/lib/dictionaries";
 import { cn } from "@/lib/utils";
-import { Edit3, Star, Trash2 } from "lucide-react";
+import { Plan } from "@prisma/client";
+import { Edit3, Star } from "lucide-react";
 import { useState } from "react";
 import toast from "react-hot-toast";
-
-type PlanRow = {
-  id: string;
-  key: string;
-  name: string;
-  description: string;
-  price: string;
-  popular?: boolean;
-  features: string[];
-};
+import Spinner from "../shared/Spinner";
+import EditPlanDialog from "./EditPlanDialog";
 
 const PricingClient = ({
-  initialPlans,
+  initialPlans: plans,
   dict,
+  lang,
 }: {
-  initialPlans: PlanRow[];
+  initialPlans: Plan[];
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
   const t = dict.admin_pricing;
-  const [plans, setPlans] = useState<PlanRow[]>(initialPlans ?? []);
+  const [isOpen, setIsOpen] = useState(false);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const togglePopular = (id: string) => {
-    setPlans((p) =>
-      p.map((pl) => (pl.id === id ? { ...pl, popular: !pl.popular } : pl)),
-    );
-    toast.success(t.toast_toggled_popular);
+  const togglePopular = async (id: string) => {
+    try {
+      setLoading(true);
+      await togglePlanPopular(id, lang);
+      toast.success(t.toast_toggled_popular);
+    } catch (error) {
+      console.log(error);
+      toast.error(error instanceof Error ? error.message : "An error occurred");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleEdit = (id: string) => {
-    toast.success(t.toast_edit_placeholder);
-  };
-
-  const handleDelete = (id: string) => {
-    if (!confirm(t.confirm_delete)) return;
-    setPlans((p) => p.filter((pl) => pl.id !== id));
-    toast.success(t.toast_deleted);
+  const handleEdit = (plan: Plan) => {
+    setPlan(plan);
+    setIsOpen(true);
   };
 
   return (
@@ -61,13 +59,7 @@ const PricingClient = ({
           <h1 className="text-2xl font-bold">{t.title}</h1>
           <p className="text-muted-foreground">{t.description}</p>
         </div>
-        <div>
-          <Button onClick={() => toast(t.toast_create_placeholder)}>
-            {t.create_button}
-          </Button>
-        </div>
       </div>
-
       <div className="grid gap-6 md:grid-cols-2">
         {plans.length === 0 ? (
           <div className="text-muted-foreground col-span-full text-center">
@@ -82,7 +74,7 @@ const PricingClient = ({
               <CardHeader className="flex items-start justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2">
-                    {plan.name}
+                    {plan.title}
                     {plan.popular && (
                       <Badge variant="default">
                         {t.popular_badge ?? "Popular"}
@@ -114,7 +106,7 @@ const PricingClient = ({
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleEdit(plan.id)}
+                      onClick={() => handleEdit(plan)}
                     >
                       <Edit3 className="mr-2 h-4 w-4" /> {t.edit_button}
                     </Button>
@@ -122,18 +114,15 @@ const PricingClient = ({
                       variant="outline"
                       size="sm"
                       onClick={() => togglePopular(plan.id)}
+                      disabled={loading}
                     >
-                      {plan.popular ? t.unmark_popular : t.mark_popular}
-                    </Button>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(plan.id)}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" /> {t.delete_button}
+                      {loading ? (
+                        <Spinner />
+                      ) : plan.popular ? (
+                        t.unmark_popular
+                      ) : (
+                        t.mark_popular
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -142,6 +131,14 @@ const PricingClient = ({
           ))
         )}
       </div>
+
+      <EditPlanDialog
+        isOpen={isOpen}
+        plan={plan}
+        onClose={() => setIsOpen(false)}
+        lang={lang}
+        t={t}
+      />
     </div>
   );
 };

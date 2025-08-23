@@ -571,10 +571,51 @@
     "unmark_popular": "إلغاء تمييز الشائع",
     "delete_button": "حذف",
     "toast_toggled_popular": "تم تحديث حالة الشيوع.",
-    "toast_edit_placeholder": "فتح نافذة تعديل الخطة (لم تُنفذ).",
-    "toast_deleted": "تم حذف الخطة (محليًا).",
-    "toast_create_placeholder": "فتح واجهة إنشاء الخطة (قريبًا).",
-    "confirm_delete": "هل أنت متأكد من حذف هذه الخطة؟"
+    "toast_deleted": "تم حذف الخطة",
+    "confirm_delete": "هل أنت متأكد من حذف هذه الخطة؟",
+    "confirm_title": "تأكيد الحذف",
+    "toast_error": "حدث خطأ. الرجاء المحاولة مرة أخرى.",
+
+    "create_plan_title": "إنشاء خطة",
+    "edit_plan_title": "تعديل الخطة",
+    "plan_description": "",
+
+    "toast_created": "تم إنشاء الخطة.",
+    "toast_updated": "تم تحديث الخطة.",
+    "save_failed": "فشل الحفظ. الرجاء المحاولة مرة أخرى.",
+
+    "feature_already_exists": "الميزة موجودة بالفعل.",
+    "feature_cannot_be_empty": "لا يمكن أن تكون الميزة فارغة.",
+
+    "fields_name": "اسم الخطة",
+    "fields_title": "العنوان",
+    "fields_description": "الوصف",
+    "fields_price": "السعر (للعرض)",
+    "fields_price_amount": "مقدار السعر (سنت)",
+    "fields_interval": "الفترة",
+    "fields_interval_placeholder": "شهر / سنة",
+    "fields_minutes_per_month": "دقائق شهريًا",
+    "fields_agents": "الوكلاء",
+    "fields_features": "الميزات",
+    "features_add_placeholder": "أضف ميزة",
+    "add_feature": "أضف",
+    "no_features": "لم تُضف ميزات بعد",
+    "click_to_edit": "انقر للتعديل",
+
+    "month": "شهر",
+    "year": "سنة",
+
+    "edit": "تعديل",
+    "delete": "حذف",
+    "cancel": "إلغاء",
+    "save": "حفظ",
+    "saving": "جاري الحفظ...",
+
+    "select_plan_name": "اختر اسم الخطة",
+    "free": "مجاني",
+    "starter": "مبتدئ",
+    "pro": "احترافي",
+    "enterprise": "مؤسسة"
   },
   "admin_cache": {
     "title": "قاعدة المعرفة والكاش",

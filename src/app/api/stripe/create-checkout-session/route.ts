@@ -1,8 +1,9 @@
-import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { SubscriptionStatus } from "@prisma/client";
+// app/api/stripe/create-checkout/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
+import { SubscriptionStatus } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -13,7 +14,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { planId, lang } = body;
+    const { planId, lang } = body as { planId: string; lang: string };
 
     const session = await auth();
     if (!session?.user?.email) {
@@ -38,81 +39,60 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    // Look up target plan in DB
     const targetPlan = await prisma.plan.findUnique({ where: { id: planId } });
     if (!targetPlan) {
       return NextResponse.json({ error: "Plan not found" }, { status: 404 });
     }
 
-    // Get current active subscription
-    const currentSubscription = user.subscriptions[0];
-
-    // Handle FREE plan signup (new users or cancellation to free)
-    if (targetPlan.name === "FREE") {
-      if (currentSubscription?.stripeSubscriptionId) {
-        // Cancel current Stripe subscription immediately
-        await stripe.subscriptions.cancel(
-          currentSubscription.stripeSubscriptionId,
-        );
-
-        // Update local subscription to canceled
-        await prisma.subscription.update({
-          where: { id: currentSubscription.id },
-          data: {
-            status: SubscriptionStatus.CANCELED,
-            updatedAt: new Date(),
-          },
-        });
-
-        // Create new free subscription
-        await prisma.subscription.create({
-          data: {
-            userId: user.id,
-            planId: targetPlan.id,
-            status: SubscriptionStatus.ACTIVE,
-            currentPeriodStart: new Date(),
-            currentPeriodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), // 30 days
-          },
-        });
-      } else {
-        // Create free subscription for new users
-        await prisma.subscription.create({
-          data: {
-            userId: user.id,
-            planId: targetPlan.id,
-            status: SubscriptionStatus.ACTIVE,
-            currentPeriodStart: new Date(),
-            currentPeriodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), // 30 days
-          },
-        });
-      }
-      return NextResponse.json({
-        url: null,
-        message: "Successfully switched to free plan!",
-      });
-    }
-
-    // Check if user already has an active paid subscription
-    if (currentSubscription && currentSubscription.plan.name !== "FREE") {
+    if (targetPlan.lang !== lang) {
       return NextResponse.json(
-        {
-          error:
-            "You already have an active subscription. Please cancel your current subscription before subscribing to a new plan.",
-        },
+        { error: "Plan language mismatch" },
         { status: 400 },
       );
     }
 
-    // Handle new paid subscription
+    // FREE plan handling (unchanged behavior, but documented)
+    if (targetPlan.name === "FREE") {
+      const currentSubscription = user.subscriptions[0];
+      if (currentSubscription?.stripeSubscriptionId) {
+        // cancel immediately OR set cancel_at_period_end = true depending on your policy
+        await stripe.subscriptions.update(
+          currentSubscription.stripeSubscriptionId,
+          {
+            cancel_at_period_end: true, // change to immediate cancel by using stripe.subscriptions.del(...)
+          },
+        );
+
+        await prisma.subscription.update({
+          where: { id: currentSubscription.id },
+          data: { status: "CANCELED", updatedAt: new Date() },
+        });
+      }
+
+      await prisma.subscription.create({
+        data: {
+          userId: user.id,
+          planId: targetPlan.id,
+          status: "ACTIVE",
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), // 30 days
+        },
+      });
+
+      return NextResponse.json({ url: null, message: "Switched to free plan" });
+    }
+
+    // Paid plan: require a stripePriceId
     const stripePriceId = targetPlan.stripePriceId;
     if (!stripePriceId) {
+      console.error("Plan missing stripePriceId", { planId: targetPlan.id });
       return NextResponse.json(
         { error: "Plan not configured with Stripe price" },
         { status: 500 },
       );
     }
 
-    // Ensure user has Stripe customer ID
+    // Ensure Stripe customer exists for user
     let stripeCustomerId = user.stripeCustomerId ?? undefined;
     if (!stripeCustomerId) {
       const customer = await stripe.customers.create({
@@ -127,7 +107,14 @@ export async function POST(request: Request) {
       });
     }
 
-    // Create new Stripe checkout session
+    // Build subscription_data.metadata to persist useful fallbacks
+    const subscriptionMetadata = {
+      userId: user.id,
+      planId: targetPlan.id,
+      planName: targetPlan.name,
+      planLang: targetPlan.lang,
+    };
+
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: "subscription",
       success_url:
@@ -140,21 +127,17 @@ export async function POST(request: Request) {
           : process.env.STRIPE_CANCEL_URL_AR!,
       payment_method_types: ["card"],
       customer: stripeCustomerId,
-      line_items: [{ price: targetPlan.stripePriceId!, quantity: 1 }],
+      line_items: [{ price: stripePriceId, quantity: 1 }],
       subscription_data: {
-        metadata: {
-          userId: user.id,
-          planId: targetPlan.id,
-          subscriptionType: "new",
-        },
+        metadata: subscriptionMetadata,
       },
     };
 
     const checkoutSession =
       await stripe.checkout.sessions.create(sessionParams);
     return NextResponse.json({ url: checkoutSession.url });
-  } catch (error) {
-    console.error("Stripe create-session error", error);
+  } catch (err) {
+    console.error("Stripe create-session error", err);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 }

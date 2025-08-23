@@ -72,7 +72,7 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => {
-        const raw = row.original.plan?.priceAmount ?? 0;
+        const raw = (row.original.plan?.priceAmount ?? 0) / 100;
         const amount = Number(raw) || 0;
         const currency = "USD";
         try {

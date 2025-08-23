@@ -54,14 +54,19 @@ const PricingPage = async ({ params }: Props) => {
   }
 
   const plans = await prisma.plan.findMany({
+    where: { lang },
     orderBy: { priceAmount: "asc" },
   });
 
-  // Simplified button logic - only show buttons for free plan or if user has no active subscription
+  const getCurrentPlanName = () => {
+    return currentSubscription?.plan?.name || null;
+  };
+
   const getButtonProps = (plan: Plan) => {
     const isFree = plan.priceAmount === 0;
+    const currentPlanName = getCurrentPlanName();
     const hasActivePaidSubscription =
-      currentSubscription && currentSubscription.plan.name !== "FREE";
+      currentSubscription && currentPlanName !== "FREE";
 
     // Free plan - always accessible
     if (isFree) {
@@ -69,7 +74,7 @@ const PricingPage = async ({ params }: Props) => {
         text: t.getStarted,
         disabled: false,
         variant: "outline" as const,
-        isCurrentPlan: false,
+        isCurrentPlan: currentPlanName === "FREE",
         showButton: true,
       };
     }
@@ -80,7 +85,7 @@ const PricingPage = async ({ params }: Props) => {
         text: t.subscribe,
         disabled: true,
         variant: "outline" as const,
-        isCurrentPlan: false,
+        isCurrentPlan: currentPlanName === plan.name,
         showButton: false, // Hide button for paid plans when user has active subscription
       };
     }
@@ -90,13 +95,13 @@ const PricingPage = async ({ params }: Props) => {
       text: t.subscribe,
       disabled: false,
       variant: plan.popular ? ("default" as const) : ("outline" as const),
-      isCurrentPlan: false,
+      isCurrentPlan: currentPlanName === plan.name,
       showButton: true,
     };
   };
 
   const hasActivePaidSubscription =
-    currentSubscription && currentSubscription.plan.name !== "FREE";
+    currentSubscription && getCurrentPlanName() !== "FREE";
 
   return (
     <section className="py-16 md:py-24">
@@ -145,11 +150,11 @@ const PricingPage = async ({ params }: Props) => {
           <div className="grid w-full max-w-6xl gap-8 lg:grid-cols-3">
             {plans.map((plan) => {
               const buttonProps = getButtonProps(plan);
-              const isCurrentPlan = currentSubscription?.planId === plan.id;
+              const isCurrentPlan = getCurrentPlanName() === plan.name;
 
               return (
                 <Card
-                  key={plan.name}
+                  key={plan.id}
                   className={`relative flex flex-col ${
                     plan.popular && !isCurrentPlan
                       ? "border-primary ring-primary scale-105 ring-2"
