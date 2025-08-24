@@ -1,5 +1,7 @@
-import SettingsClient from "@/components/admin/SettingsClient";
+import AdminSettingsClient from "@/components/admin/AdminSettingsClient";
+import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
+import { redirect } from "next/navigation";
 
 interface PageProps {
   params: Promise<{ lang: SupportedLang }>;
@@ -8,21 +10,21 @@ interface PageProps {
 const AdminSettingsPage = async ({ params }: PageProps) => {
   const { lang, dict } = await getLangAndDict(params);
 
-  // Dummy initial settings (for testing only)
-  const initialSettings = {
-    siteTitle: "Aoun AI",
-    siteDescription: "AI agents platform for business automation.",
-    contactEmail: "support@aoun.ai",
-    supportUrl: "https://aoun.ai/support",
-    defaultLanguage: lang ?? "en",
-    defaultTheme: "light",
-    maintenanceMode: false,
-    logoUrl: "/images/logo-square.png",
+  const session = await auth();
+  const user = session?.user;
+
+  if (!user) return redirect(`/${lang}/auth/login`);
+  if (!user.role || user.role !== "ADMIN") return redirect(`/${lang}`);
+
+  const adminPublic = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    image: user.image,
+    role: user.role,
   };
 
-  return (
-    <SettingsClient lang={lang} dict={dict} initialSettings={initialSettings} />
-  );
+  return <AdminSettingsClient lang={lang} dict={dict} user={adminPublic} />;
 };
 
 export default AdminSettingsPage;

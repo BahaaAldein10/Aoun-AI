@@ -113,3 +113,15 @@ export async function deleteUser({
     throw error;
   }
 }
+
+export async function updateAvatar(id: string, avatar: string) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Not authenticated");
+
+    await prisma.user.update({ where: { id }, data: { image: avatar } });
+  } catch (error) {
+    console.log(error);
+    throw error;
+  }
+}

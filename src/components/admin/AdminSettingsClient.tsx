@@ -28,16 +28,21 @@ import { SettingsFormValues, settingsSchema } from "@/lib/schemas/dashboard";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { User } from "next-auth";
+import React from "react";
 import { useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 
-interface SettingsClientProps {
+interface AdminSettingsClientProps {
   user: User;
   dict: Dictionary;
   lang: SupportedLang;
 }
 
-const SettingsClient = ({ user, dict, lang }: SettingsClientProps) => {
+const AdminSettingsClient = ({
+  user,
+  dict,
+  lang,
+}: AdminSettingsClientProps) => {
   const t = dict.dashboard_settings;
 
   const form = useForm<SettingsFormValues>({
@@ -139,7 +144,7 @@ const SettingsClient = ({ user, dict, lang }: SettingsClientProps) => {
         <form onSubmit={handleSubmit(onSubmit)}>
           <Card className={cn(lang === "ar" && "rtl:text-right")}>
             <CardHeader>
-              <CardTitle>{t.user_profile}</CardTitle>
+              <CardTitle>{t.admin_profile}</CardTitle>
               <CardDescription>{t.user_profile_desc}</CardDescription>
             </CardHeader>
 
@@ -214,4 +219,4 @@ const SettingsClient = ({ user, dict, lang }: SettingsClientProps) => {
   );
 };
 
-export default SettingsClient;
+export default AdminSettingsClient;

@@ -1,7 +1,13 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import type { Dictionary } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
 import { cn } from "@/lib/utils";
@@ -16,12 +22,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Avatar, AvatarImage } from "../ui/avatar";
 
 type StatShape = {
   totalUsers: number;
   totalBots: number;
-  totalLeads: number;
-  totalKnowledgeBases: number;
+  avgResponseTime: number;
+  serverStatus: string;
 };
 
 type RecentUser = {
@@ -29,11 +36,17 @@ type RecentUser = {
   name?: string;
   email?: string;
   createdAt: string;
+  image: string | null;
 };
-type RecentLead = {
+type RecentSubscription = {
   id: string;
-  name?: string;
-  contact?: string;
+  user: {
+    id: string;
+    name?: string;
+    email?: string;
+    image: string | null;
+  } | null;
+  plan: { id: string; title?: string; price?: string } | null;
   status?: string;
   createdAt: string;
 };
@@ -43,36 +56,57 @@ const AdminDashboardClient = ({
   dict,
   stats,
   recentUsers,
-  recentLeads,
+  recentSubscriptions,
+  agentsSeries,
+  newUsersSeries,
 }: {
   lang: SupportedLang;
   dict: Dictionary;
   stats: StatShape;
   recentUsers: RecentUser[];
-  recentLeads: RecentLead[];
+  recentSubscriptions: RecentSubscription[];
+  agentsSeries: { month: string; agents: number }[];
+  newUsersSeries: { month: string; newUsers: number }[];
 }) => {
   const t = dict.admin_dashboard;
   const isRtl = lang === "ar";
 
-  // placeholder series for chart (replace with server-provided series)
-  const monthlySeries = [
-    { month: "Jan", interactions: 1200 },
-    { month: "Feb", interactions: 2100 },
-    { month: "Mar", interactions: 800 },
-    { month: "Apr", interactions: 1600 },
-    { month: "May", interactions: 1900 },
-    { month: "Jun", interactions: 2300 },
-  ];
-
   return (
     <div className={cn("space-y-6", isRtl && "rtl")}>
       <div className="space-y-2">
-        <h1 className="text-2xl font-bold">{t.title}</h1>
-        <p className="text-muted-foreground text-sm">{t.overview}</p>
+        <h1 className="text-2xl font-bold">{t.title ?? "Admin Dashboard"}</h1>
       </div>
 
       {/* Top stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Avg. Response Time */}
+        <Card className="p-4">
+          <CardHeader>
+            <CardTitle className="text-sm">{t.avg_response_time}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {stats.avgResponseTime} {lang === "ar" ? "مللي ثانية" : "ms"}
+            </div>
+            <div className="text-muted-foreground text-sm">
+              {t.avg_response_time_desc}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Server Status */}
+        <Card className="p-4">
+          <CardHeader>
+            <CardTitle className="text-sm">{t.server_status}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.serverStatus}</div>
+            <div className="text-muted-foreground text-sm">
+              {t.server_status_desc}
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="p-4">
           <CardHeader>
             <CardTitle className="text-sm">{t.total_users}</CardTitle>
@@ -89,53 +123,28 @@ const AdminDashboardClient = ({
 
         <Card className="p-4">
           <CardHeader>
-            <CardTitle className="text-sm">{t.bots}</CardTitle>
+            <CardTitle className="text-sm">{t.bots ?? "Agents"}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.totalBots}</div>
             <div className="text-muted-foreground text-sm">{t.bots_desc}</div>
           </CardContent>
         </Card>
-
-        <Card className="p-4">
-          <CardHeader>
-            <CardTitle className="text-sm">{t.leads}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {stats.totalLeads.toLocaleString()}
-            </div>
-            <div className="text-muted-foreground text-sm">{t.leads_desc}</div>
-          </CardContent>
-        </Card>
-
-        <Card className="p-4">
-          <CardHeader>
-            <CardTitle className="text-sm">{t.knowledge_bases}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {stats.totalKnowledgeBases}
-            </div>
-            <div className="text-muted-foreground text-sm">
-              {t.knowledge_bases_desc}
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Charts + lists */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Monthly Interactions Line Chart */}
-        <Card className="lg:col-span-2">
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* Agents Created Over Time (Line Chart) */}
+        <Card className="lg:col-span-3">
           <CardHeader>
-            <CardTitle>{t.monthly_interactions}</CardTitle>
+            <CardTitle>{t.agents_created_over_time}</CardTitle>
+            <CardDescription>{t.agents_created_over_time_desc}</CardDescription>
           </CardHeader>
           <CardContent>
             <div style={{ width: "100%", height: 260 }} dir="ltr">
               <ResponsiveContainer>
                 <LineChart
-                  data={monthlySeries}
+                  data={agentsSeries}
                   margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
                 >
                   <XAxis
@@ -177,7 +186,7 @@ const AdminDashboardClient = ({
                   />
                   <Line
                     type="monotone"
-                    dataKey="interactions"
+                    dataKey="agents"
                     stroke="var(--primary)"
                     strokeWidth={3}
                     activeDot={{
@@ -193,16 +202,17 @@ const AdminDashboardClient = ({
           </CardContent>
         </Card>
 
-        {/* Interactions Breakdown Bar Chart */}
-        <Card>
+        {/* New User Growth (Bar Chart) */}
+        <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>{t.interactions_breakdown}</CardTitle>
+            <CardTitle>{t.new_user_growth}</CardTitle>
+            <CardDescription>{t.new_user_growth_desc}</CardDescription>
           </CardHeader>
           <CardContent>
             <div style={{ width: "100%", height: 260 }} dir="ltr">
               <ResponsiveContainer>
                 <BarChart
-                  data={monthlySeries}
+                  data={newUsersSeries}
                   margin={{ top: 20, right: 30, left: 10, bottom: 5 }}
                 >
                   <XAxis
@@ -211,7 +221,6 @@ const AdminDashboardClient = ({
                     fontSize={13}
                     tickLine={false}
                     axisLine={false}
-                    padding={{ left: 10, right: 10 }}
                   />
                   <YAxis
                     stroke="var(--muted-foreground)"
@@ -219,7 +228,7 @@ const AdminDashboardClient = ({
                     tickLine={false}
                     axisLine={false}
                     tickCount={6}
-                    domain={["dataMin", "dataMax"]}
+                    domain={[0, "dataMax"]}
                   />
                   <Tooltip
                     contentStyle={{
@@ -235,7 +244,7 @@ const AdminDashboardClient = ({
                     itemStyle={{ color: "var(--primary)" }}
                   />
                   <Bar
-                    dataKey="interactions"
+                    dataKey="newUsers"
                     fill="var(--primary)"
                     radius={[6, 6, 0, 0]}
                     barSize={24}
@@ -247,56 +256,116 @@ const AdminDashboardClient = ({
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+      <div className="grid gap-6 lg:grid-cols-5">
+        <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>{t.recent_users}</CardTitle>
+            <CardDescription>{t.recent_users_desc}</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
-              {recentUsers.map((u) => (
-                <li key={u.id} className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">{u.name}</div>
-                    <div className="text-muted-foreground text-xs">
-                      {u.email}
+              {recentUsers.length === 0 ? (
+                <div className="text-muted-foreground text-sm">
+                  {t.no_recent_items}
+                </div>
+              ) : (
+                recentUsers.map((u) => (
+                  <li key={u.id} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Avatar>
+                        <AvatarImage
+                          src={u.image ?? "/images/avatar.png"}
+                          alt={u.name ?? "User"}
+                          loading="lazy"
+                        />
+                      </Avatar>
+                      <div>
+                        <div className="font-medium">
+                          {u.name ?? "Unknown user"}
+                        </div>
+                        <div className="text-muted-foreground text-xs">
+                          {u.email ?? "—"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-muted-foreground text-xs">
-                    {new Date(u.createdAt).toLocaleString()}
-                  </div>
-                </li>
-              ))}
+                    <div className="text-muted-foreground text-xs">
+                      {new Date(u.createdAt).toLocaleString(
+                        lang === "ar" ? "ar-EG" : undefined,
+                        {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        },
+                      )}
+                    </div>
+                  </li>
+                ))
+              )}
             </ul>
           </CardContent>
         </Card>
 
-        <Card>
+        {/* Recent Subscriptions */}
+        <Card className="lg:col-span-3">
           <CardHeader>
-            <CardTitle>{t.recent_leads}</CardTitle>
+            <CardTitle>{t.recent_subscriptions}</CardTitle>
+            <CardDescription>{t.recent_subscriptions_desc}</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
-              {recentLeads.map((l) => (
-                <li key={l.id} className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">{l.name}</div>
-                    <div className="text-muted-foreground text-xs">
-                      {l.contact}
+              {recentSubscriptions.length === 0 ? (
+                <div className="text-muted-foreground text-sm">
+                  {t.no_recent_items}
+                </div>
+              ) : (
+                recentSubscriptions.map((s) => (
+                  <li
+                    key={s.id}
+                    className="bg-card flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    {/* User info */}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Avatar className="h-10 w-10 flex-shrink-0">
+                        <AvatarImage
+                          src={s.user?.image ?? "/images/avatar.png"}
+                          alt={s.user?.name ?? "User"}
+                          loading="lazy"
+                        />
+                      </Avatar>
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">
+                          {s.user?.name ?? "Unknown user"}
+                        </div>
+                        <div className="text-muted-foreground truncate text-xs">
+                          {s.user?.email ?? "—"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <Badge
-                      variant={l.status === "new" ? "default" : "secondary"}
-                    >
-                      {l.status === "new" ? t.status_new : t.status_contacted}
-                    </Badge>
-                    <div className="text-muted-foreground text-xs">
-                      {new Date(l.createdAt).toLocaleString()}
+
+                    {/* Plan + Price + Date */}
+                    <div className="flex flex-shrink-0 flex-col items-start gap-2 text-sm sm:items-end">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="secondary">
+                          {s.plan?.title ?? "N/A"}
+                        </Badge>
+                        {s.plan?.price && (
+                          <span className="text-primary font-medium">
+                            {s.plan.price}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-muted-foreground text-xs">
+                        {new Date(s.createdAt).toLocaleString(
+                          lang === "ar" ? "ar-EG" : undefined,
+                          {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          },
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                ))
+              )}
             </ul>
           </CardContent>
         </Card>

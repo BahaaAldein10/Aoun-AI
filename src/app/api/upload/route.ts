@@ -1,24 +1,10 @@
-// app/api/upload/route.ts
+import { prisma } from "@/lib/prisma";
+import admin from "firebase-admin";
 import { NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import admin from "firebase-admin";
 
-/**
- * Server-side upload route using firebase-admin.
- *
- * Expects a multipart/form-data POST with a "file" field.
- *
- * Environment variables used:
- * - FIREBASE_SERVICE_ACCOUNT_KEY  -> stringified service account JSON (preferred)
- * - FIREBASE_STORAGE_BUCKET      -> e.g. "aoun-ai-c5005.appspot.com"
- *
- * Alternatively, you can set GOOGLE_APPLICATION_CREDENTIALS to a path to
- * a service account JSON file and omit FIREBASE_SERVICE_ACCOUNT_KEY.
- */
-
-// initialize admin app only once (safe in Next)
+// --- Firebase Admin Initialization ---
 if (!admin.apps.length) {
-  // Either parse a stringified service account OR rely on ADC via GOOGLE_APPLICATION_CREDENTIALS
   if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
     admin.initializeApp({
@@ -26,7 +12,6 @@ if (!admin.apps.length) {
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
     });
   } else {
-    // If GOOGLE_APPLICATION_CREDENTIALS is set to a file path, this will use ADC
     admin.initializeApp({
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
     });
@@ -35,44 +20,85 @@ if (!admin.apps.length) {
 
 const bucket = admin.storage().bucket();
 
+// --- Config ---
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_TYPES = [
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+];
+
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const userId = formData.get("userId") as string | null; // 👈 receive userId from client
 
-    if (!file) {
-      return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+    if (!file || !userId) {
+      return NextResponse.json(
+        { error: "Missing file or userId" },
+        { status: 400 },
+      );
     }
 
+    // --- Validate file size ---
+    if (file.size > MAX_FILE_SIZE) {
+      return NextResponse.json(
+        { error: "File too large. Max size is 10MB." },
+        { status: 400 },
+      );
+    }
+
+    // --- Validate file type ---
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      return NextResponse.json(
+        { error: `Unsupported file type: ${file.type}` },
+        { status: 400 },
+      );
+    }
+
+    // --- Prepare file for upload ---
     const buffer = Buffer.from(await file.arrayBuffer());
     const fileName = `${Date.now()}-${uuidv4()}-${file.name}`;
     const destinationPath = `uploads/${fileName}`;
     const fileRef = bucket.file(destinationPath);
 
-    // Save the file buffer to the bucket
+    // --- Upload to Firebase ---
     await fileRef.save(buffer, {
-      metadata: {
-        contentType: file.type || "application/octet-stream",
-      },
-      resumable: false, // small files: disable resumable for simplicity
+      metadata: { contentType: file.type },
+      resumable: false,
     });
 
-    // Option A: generate a signed URL (recommended for private buckets)
+    // --- Signed URL ---
     const [signedUrl] = await fileRef.getSignedUrl({
       action: "read",
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
 
-    // Return signed URL and internal path (you can persist path in DB if you prefer)
-    return NextResponse.json({
-      url: signedUrl,
-      path: destinationPath,
-      name: fileName,
+    // --- Save in Mongo (Prisma) ---
+    const uploadedFile = await prisma.uploadedFile.create({
+      data: {
+        userId,
+        filename: fileName,
+        fileType: file.type,
+        size: file.size,
+        url: signedUrl,
+        meta: {
+          originalName: file.name,
+          storagePath: destinationPath,
+        },
+      },
     });
+
+    return NextResponse.json(uploadedFile);
   } catch (error) {
-    console.error("[API /upload] Error uploading file:", error);
+    console.error("[API /upload] Upload error:", error);
+
     return NextResponse.json(
-      { error: (error as Error).message ?? "Upload failed" },
+      { error: error instanceof Error ? error.message : "Upload failed" },
       { status: 500 },
     );
   }

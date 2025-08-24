@@ -20,14 +20,12 @@ import { cn } from "@/lib/utils";
 import {
   BarChartBig,
   BookOpen,
-  Bot,
   CreditCard,
   DollarSign,
   FileText,
   Globe,
   LayoutDashboard,
   Library,
-  Link2,
   LogOut,
   Settings,
   Users,
@@ -53,28 +51,19 @@ const AdminSidebar = ({
   const isRtl = lang === "ar";
 
   const adminMenu = [
-    // MVP core
     { href: "/admin", icon: LayoutDashboard, label: t.dashboard },
-    { href: "/admin/users", icon: Users, label: t.users },
-    { href: "/admin/bots", icon: Bot, label: t.bots },
-    { href: "/admin/settings", icon: Settings, label: t.settings },
-
-    // Phase 2
-    // { href: "/admin/leads", icon: UserSearch, label: t.leads },
+    { href: "/admin/reports", icon: BarChartBig, label: t.reports },
+    { href: "/admin/content", icon: Library, label: t.content_management },
+    { href: "/admin/blog", icon: BookOpen, label: t.blog_management },
     {
       href: "/admin/knowledge-bases",
       icon: FileText,
       label: t.knowledge_bases,
     },
-    { href: "/admin/reports", icon: BarChartBig, label: t.reports },
-
-    // Optional / later
-    { href: "/admin/integrations", icon: Link2, label: t.integrations },
-    // { href: "/admin/audit-logs", icon: ClipboardList, label: t.audit_logs },
-    { href: "/admin/content", icon: Library, label: t.content_management },
-    { href: "/admin/blog", icon: BookOpen, label: t.blog_management },
+    { href: "/admin/users", icon: Users, label: t.users },
     { href: "/admin/subscriptions", icon: CreditCard, label: t.subscriptions },
     { href: "/admin/pricing", icon: DollarSign, label: t.pricing },
+    { href: "/admin/settings", icon: Settings, label: t.settings },
   ];
 
   const isActive = (href: string) => {
@@ -103,7 +92,7 @@ const AdminSidebar = ({
 
         <ScrollArea className="h-[calc(100vh-220px)]">
           <SidebarGroup>
-            <SidebarGroupContent>
+            <SidebarGroupContent className="mt-4">
               <SidebarMenu>
                 {adminMenu.map((m) => {
                   const Icon = m.icon;

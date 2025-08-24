@@ -23,6 +23,12 @@ enum BotStatus {
   DISABLED
 }
 
+enum KnowledgeBaseSource {
+  URL
+  UPLOAD
+  MANUAL
+}
+
 enum LeadStatus {
   NEW
   CONTACTED
@@ -174,18 +180,18 @@ model Bot {
 }
 
 model KnowledgeBase {
-  id          String      @id @default(auto()) @map("_id") @db.ObjectId
-  userId      String      @db.ObjectId
-  botId       String?     @db.ObjectId
+  id          String              @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String              @db.ObjectId
+  botId       String?             @db.ObjectId
   title       String
   description String?
-  source      String? // e.g., "url", "upload", "manual"
+  source      KnowledgeBaseSource @default(MANUAL) // e.g., "url", "upload", "manual"
   documents   Document[]
   embeddings  Embedding[]
   metadata    Json?
   rawJson     Json?
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   bot  Bot? @relation(fields: [botId], references: [id], onDelete: Cascade)

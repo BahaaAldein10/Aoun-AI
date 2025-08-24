@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { KnowledgeBaseSource } from "@prisma/client";
 import { Queue } from "bullmq";
 import { NextResponse } from "next/server";
 
@@ -56,7 +57,7 @@ export async function POST(req: Request) {
       data: {
         userId: session.user.id,
         title: body.kbTitle ?? uploadedFile?.filename ?? body.url ?? "Ingest",
-        source: body.url ? "url" : "upload",
+        source: body.url ? KnowledgeBaseSource.URL : KnowledgeBaseSource.UPLOAD,
         description: body.url
           ? `Crawled from ${body.url}`
           : `Ingested upload ${uploadedFile?.filename}`,

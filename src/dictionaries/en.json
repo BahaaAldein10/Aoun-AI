@@ -205,6 +205,7 @@
   "dashboard_settings": {
     "title": "Settings",
     "user_profile": "User Profile",
+    "admin_profile": "Admin Profile",
     "user_profile_desc": "Manage your account details.",
     "change_avatar": "Change Avatar",
     "avatar_upload_success": "Avatar uploaded successfully!",
@@ -399,17 +400,17 @@
   },
   "admin_layout": {
     "admin_panel_title": "Aoun — Admin Panel",
-    "dashboard": "Dashboard",
-    "users": "Users",
+    "dashboard": "Overview",
+    "users": "Users Management",
     "bots": "Bots",
     "leads": "Leads",
-    "knowledge_bases": "Knowledge Bases",
+    "knowledge_bases": "KB & Cache",
     "blog_management": "Blog Management",
     "integrations": "Integrations",
-    "reports": "Reports",
+    "reports": "Analytics & Performance",
     "settings": "Settings",
     "audit_logs": "Audit Logs",
-    "subscriptions": "Subscriptions",
+    "subscriptions": "Subscriptions & Invoices",
     "pricing": "Pricing Plans",
     "overview": "Overview",
     "analytics": "Analytics & Performance",
@@ -426,29 +427,50 @@
     "manage_button": "Manage"
   },
   "admin_dashboard": {
-    "title": "Admin Dashboard",
-    "overview": "Overview",
+    "title": "Admin Overview",
     "total_users": "Total Users",
     "total_users_desc": "Active users on platform",
-    "bots": "Bots",
+    "bots": "Total Agents",
     "bots_desc": "Total configured agents",
-    "leads": "Leads",
-    "leads_desc": "Leads captured by agents",
-    "knowledge_bases": "Knowledge Bases",
-    "knowledge_bases_desc": "KBs generated",
+    "avg_response_time": "Avg. Response Time",
+    "avg_response_time_desc": "Average agent response time (ms)",
+    "server_status": "Server Status",
+    "server_status_desc": "Current platform server status",
+
+    "agents_created_over_time": "Agents Created Over Time",
+    "agents_created_over_time_desc": "Number of agents created per month",
+
+    "new_user_growth": "New User Growth",
+    "new_user_growth_desc": "New user sign-ups per month",
+
+    "recent_subscriptions": "Recent Subscriptions",
+    "recent_subscriptions_desc": "Latest users who have subscribed to a plan",
+
+    "chart_agents": "Agents",
+    "chart_new_users": "New Users",
+
     "monthly_interactions": "Monthly Interactions",
     "interactions_breakdown": "Interactions Breakdown",
     "chart_interactions": "Interactions",
     "chart_users": "Users",
+
     "recent_users": "Recent Users",
+    "recent_users_desc": "Most recently registered users",
+
     "recent_leads": "Recent Leads",
+
     "status_new": "New",
     "status_contacted": "Contacted",
+
     "no_recent_items": "No recent items",
     "view_button": "View",
     "create_button": "Create",
     "active_label": "Active",
-    "inactive_label": "Inactive"
+    "inactive_label": "Inactive",
+
+    "subscription_user_label": "User",
+    "subscription_plan_label": "Plan",
+    "subscription_status_label": "Status"
   },
   "admin_users": {
     "title": "Users",
@@ -533,32 +555,6 @@
     "toast_updated": "Bot updated",
     "previous_button": "Previous",
     "next_button": "Next"
-  },
-  "admin_analytics": {
-    "title": "Advanced Performance Analytics",
-    "description": "A comprehensive dashboard for monitoring system health, AI performance, and operational costs.",
-    "cpu_usage": "CPU Usage",
-    "memory_usage": "Memory Usage",
-    "of_total": "of {total} total",
-    "api_calls_last_24h": "API Calls (24h)",
-    "from_prev_day": "from previous day",
-    "error_rate": "Error Rate",
-    "genai_costs": "GenAI Costs",
-    "estimated_mtd": "Estimated month-to-date",
-    "cache_hit_rate": "Cache Hit Rate",
-    "cache_hit_desc": "Reduced database lookups",
-    "flow_performance": "AI Flow Performance",
-    "flow_performance_desc": "Breakdown of performance for each flow.",
-    "flow_name": "Flow Name",
-    "invocations": "Invocations",
-    "avg_latency": "Avg. Latency",
-    "success_rate": "Success Rate",
-    "api_response_times": "API Response Times",
-    "p95_description": "95th percentile response times (in ms) across key endpoints.",
-    "response_time": "Response Time (ms)",
-    "daily_active_users": "Daily Active Users (DAU)",
-    "dau_desc": "User engagement over the last week.",
-    "users": "Users"
   },
   "admin_pricing": {
     "title": "Pricing Plans",
@@ -881,7 +877,7 @@
     "table_title": "Knowledge Bases",
     "th_name": "Name",
     "th_owner": "Owner",
-    "th_status": "Status",
+    "th_source": "Source",
     "th_created_at": "Created At",
     "search_placeholder": "Search name, owner or id",
     "filter_status_all": "All statuses",
@@ -898,7 +894,15 @@
     "export_json": "Export JSON",
     "toast_exported": "Exported JSON",
     "previous_button": "Previous",
-    "next_button": "Next"
+    "next_button": "Next",
+
+    "cache_total_items_title": "Total Cached Items",
+    "cache_total_items_desc": "Total unique responses stored.",
+    "cache_hit_rate_title": "Cache Hit Rate",
+    "cache_hit_rate_desc": "Of {n} total requests.",
+    "cache_requests_label": "Requests",
+    "cache_audio_size_title": "Total Audio Size",
+    "cache_audio_size_desc": "Total size of cached audio files."
   },
   "admin_integrations": {
     "title": "Integrations",
@@ -929,9 +933,9 @@
     "instagram": "Instagram Direct",
     "empty": "No integrations available"
   },
-  "admin_reports": {
-    "title": "Reports",
-    "description": "Overview of usage, bot performance, and historical interactions.",
+  "admin_analytics": {
+    "title": "Advanced Performance Analytics",
+    "description": "A comprehensive dashboard for monitoring system health, AI performance, and operational costs.",
     "total_users": "Total Users",
     "total_bots": "Total Bots",
     "total_leads": "Total Leads",
@@ -952,7 +956,39 @@
     "th_status": "Status",
     "active": "Active",
     "inactive": "Inactive",
-    "empty_state": "No data to display"
+    "empty_state": "No data to display",
+
+    "cpu_usage": "CPU Usage",
+    "cpu_usage_desc": "System CPU utilization",
+    "memory_usage": "Memory Usage",
+    "memory_usage_desc": "Memory used out of total available",
+    "api_calls_24h": "API Calls (24h)",
+    "from_previous_day": "from previous day",
+    "error_rate": "Error Rate",
+    "genai_costs": "GenAI Costs",
+    "genai_month_to_date": "Estimated month-to-date",
+    "cache_hit_rate": "Cache Hit Rate",
+    "cache_hit_rate_desc": "Reduced database lookups",
+
+    "api_response_times_title": "API Response Times (95th %ile)",
+    "api_response_times_desc": "95th percentile response times (ms) across key endpoints.",
+    "response_time_overview": "Response Time (ms)",
+    "response_time_desc": "95th percentile response times across key endpoints",
+    "response_time_sub": "95th percentile",
+
+    "ai_flow_performance_title": "AI Flow Performance",
+    "ai_flow_performance_desc": "Breakdown of performance for each flow.",
+    "ai_flow_sub": "Flow invocations and latency",
+
+    "flow_name": "Flow Name",
+    "invocations": "Invocations",
+    "avg_latency": "Avg. Latency",
+    "success_rate": "Success Rate",
+
+    "th_flow_name": "Flow Name",
+    "th_invocations": "Invocations",
+    "th_avg_latency": "Avg. Latency",
+    "th_success_rate": "Success Rate"
   },
   "widget": {
     "open_chat": "Open Chat",

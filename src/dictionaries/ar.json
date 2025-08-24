@@ -205,6 +205,7 @@
   "dashboard_settings": {
     "title": "الإعدادات",
     "user_profile": "ملف المستخدم",
+    "admin_profile": "ملف الادمن",
     "user_profile_desc": "إدارة تفاصيل حسابك.",
     "change_avatar": "تغيير الصورة",
     "avatar_upload_success": "تم تحميل الصورة بنجاح",
@@ -399,17 +400,17 @@
   },
   "admin_layout": {
     "admin_panel_title": "عون — لوحة المشرف",
-    "dashboard": "لوحة التحكم",
-    "users": "المستخدمون",
-    "bots": "البوتات",
+    "dashboard": "نظرة عامة",
+    "users": "إدارة المستخدمين",
+    "bots": "الوكلاء",
     "leads": "العملاء المحتملون",
-    "knowledge_bases": "قواعد المعرفة",
+    "knowledge_bases": "قواعد المعرفة والتخزين المؤقت",
     "blog_management": "إدارة المدونة",
     "integrations": "التكاملات",
-    "reports": "التقارير",
+    "reports": "التحليلات والأداء",
     "settings": "الإعدادات",
     "audit_logs": "سجلات التدقيق",
-    "subscriptions": "الاشتراكات",
+    "subscriptions": "الاشتراكات والفواتير",
     "pricing": "خطط الأسعار",
     "overview": "نظرة عامة",
     "analytics": "التحليلات والأداء",
@@ -426,29 +427,50 @@
     "manage_button": "إدارة"
   },
   "admin_dashboard": {
-    "title": "لوحة المشرف",
-    "overview": "نظرة عامة",
+    "title": "نظرة عامة",
     "total_users": "إجمالي المستخدمين",
     "total_users_desc": "المستخدمون النشطون على المنصة",
-    "bots": "البوتات",
+    "bots": "إجمالي الوكلاء",
     "bots_desc": "عدد الوكلاء المُعدة",
-    "leads": "العملاء المحتملون",
-    "leads_desc": "العملاء المحتملون الذين تم جمعهم بواسطة الوكلاء",
-    "knowledge_bases": "قواعد المعرفة",
-    "knowledge_bases_desc": "قواعد المعرفة المُنشأة",
+    "avg_response_time": "متوسط زمن الاستجابة",
+    "avg_response_time_desc": "متوسط زمن استجابة الوكلاء (مللي ثانية)",
+    "server_status": "حالة الخادم",
+    "server_status_desc": "الحالة الحالية لخادم المنصة",
+
+    "agents_created_over_time": "عدد الوكلاء المنشأين على مدى الوقت",
+    "agents_created_over_time_desc": "عدد الوكلاء الذين تم إنشاؤهم شهريًا",
+
+    "new_user_growth": "نمو المستخدمين الجدد",
+    "new_user_growth_desc": "عدد التسجيلات الجديدة شهريًا",
+
+    "recent_subscriptions": "الاشتراكات الحديثة",
+    "recent_subscriptions_desc": "المستخدمون الذين قاموا بالاشتراك في خطة",
+
+    "chart_agents": "وكلاء",
+    "chart_new_users": "المستخدمون الجدد",
+
     "monthly_interactions": "التفاعلات الشهرية",
     "interactions_breakdown": "تفصيل التفاعلات",
     "chart_interactions": "التفاعلات",
     "chart_users": "المستخدمون",
+
     "recent_users": "المستخدمون الجدد",
+    "recent_users_desc": "أحدث المستخدمين المسجلين",
+
     "recent_leads": "العملاء المحتملون الجدد",
+
     "status_new": "جديد",
     "status_contacted": "تم الاتصال",
+
     "no_recent_items": "لا توجد عناصر حديثة",
     "view_button": "عرض",
     "create_button": "إنشاء",
     "active_label": "نشط",
-    "inactive_label": "غير نشط"
+    "inactive_label": "غير نشط",
+
+    "subscription_user_label": "المستخدم",
+    "subscription_plan_label": "الخطة",
+    "subscription_status_label": "الحالة"
   },
   "admin_users": {
     "title": "المستخدمون",
@@ -533,32 +555,6 @@
     "toast_updated": "تم تحديث البوت",
     "previous_button": "السابق",
     "next_button": "التالي"
-  },
-  "admin_analytics": {
-    "title": "تحليلات الأداء المتقدمة",
-    "description": "لوحة تحكم شاملة لمراقبة أداء النظام، الذكاء الاصطناعي، وتكاليف التشغيل.",
-    "cpu_usage": "استخدام المعالج",
-    "memory_usage": "استخدام الذاكرة",
-    "of_total": "من إجمالي {total}",
-    "api_calls_last_24h": "استدعاءات API (24 ساعة)",
-    "from_prev_day": "مقارنة باليوم السابق",
-    "error_rate": "معدل الأخطاء",
-    "genai_costs": "تكاليف GenAI",
-    "estimated_mtd": "تقديرات هذا الشهر حتى الآن",
-    "cache_hit_rate": "معدل نجاح الكاش",
-    "cache_hit_desc": "تقليل استدعاءات قاعدة البيانات",
-    "flow_performance": "أداء عمليات الذكاء الاصطناعي",
-    "flow_performance_desc": "تحليل أداء كل عملية على حدة.",
-    "flow_name": "اسم العملية",
-    "invocations": "الاستدعاءات",
-    "avg_latency": "متوسط الكمون",
-    "success_rate": "معدل النجاح",
-    "api_response_times": "أوقات استجابة API",
-    "p95_description": "النسبة المئوية 95 لأوقات الاستجابة (مللي ثانية) عبر نقاط النهاية الرئيسية.",
-    "response_time": "وقت الاستجابة (مللي ثانية)",
-    "daily_active_users": "المستخدمون النشطون يوميًا (DAU)",
-    "dau_desc": "تفاعل المستخدمين خلال الأسبوع الماضي.",
-    "users": "المستخدمون"
   },
   "admin_pricing": {
     "title": "خطط التسعير",
@@ -881,7 +877,7 @@
     "table_title": "قواعد المعرفة",
     "th_name": "الاسم",
     "th_owner": "المالك",
-    "th_status": "الحالة",
+    "th_source": "المصدر",
     "th_created_at": "تاريخ الإنشاء",
     "search_placeholder": "ابحث بالاسم أو المالك أو المعرف",
     "filter_status_all": "كل الحالات",
@@ -898,7 +894,15 @@
     "export_json": "تصدير JSON",
     "toast_exported": "تم تصدير JSON",
     "previous_button": "السابق",
-    "next_button": "التالي"
+    "next_button": "التالي",
+
+    "cache_total_items_title": "إجمالي العناصر المخزنة",
+    "cache_total_items_desc": "إجمالي الردود الفريدة المخزنة.",
+    "cache_hit_rate_title": "نسبة استجابة الكاش",
+    "cache_hit_rate_desc": "من أصل {n} طلبات إجمالية.",
+    "cache_requests_label": "طلبات",
+    "cache_audio_size_title": "إجمالي حجم الملفات الصوتية",
+    "cache_audio_size_desc": "إجمالي حجم الملفات الصوتية المخزنة."
   },
   "admin_integrations": {
     "title": "التكاملات",
@@ -929,9 +933,9 @@
     "instagram": "إنستغرام دايركت",
     "empty": "لا توجد تكاملات"
   },
-  "admin_reports": {
-    "title": "التقارير",
-    "description": "نظرة عامة على الاستخدام، أداء الوكلاء، والتفاعلات التاريخية.",
+  "admin_analytics": {
+    "title": "تحليلات الأداء المتقدمة",
+    "description": "لوحة تحكم شاملة لمراقبة أداء النظام، الذكاء الاصطناعي، وتكاليف التشغيل.",
     "total_users": "إجمالي المستخدمين",
     "total_bots": "عدد الوكلاء",
     "total_leads": "إجمالي العملاء المحتملين",
@@ -952,7 +956,39 @@
     "th_status": "الحالة",
     "active": "نشط",
     "inactive": "غير نشط",
-    "empty_state": "لا توجد بيانات للعرض"
+    "empty_state": "لا توجد بيانات للعرض",
+
+    "cpu_usage": "استهلاك المعالج (CPU)",
+    "cpu_usage_desc": "نسبة استخدام وحدة المعالجة المركزية في النظام",
+    "memory_usage": "استهلاك الذاكرة",
+    "memory_usage_desc": "الذاكرة المستخدمة من إجمالي الذاكرة المتاحة",
+    "api_calls_24h": "استدعاءات API (24 ساعة)",
+    "from_previous_day": "من اليوم السابق",
+    "error_rate": "معدل الأخطاء",
+    "genai_costs": "تكلفة GenAI",
+    "genai_month_to_date": "التكلفة المقدرة حتى الآن في الشهر",
+    "cache_hit_rate": "معدل نجاح الكاش",
+    "cache_hit_rate_desc": "تقليل استعلامات قاعدة البيانات",
+
+    "api_response_times_title": "زمن استجابة API (النسبة المئوية 95)",
+    "api_response_times_desc": "زمن الاستجابة في النسبة المئوية 95 (مللي ثانية) عبر نقاط النهاية الأساسية.",
+    "response_time_overview": "زمن الاستجابة (مللي ثانية)",
+    "response_time_desc": "زمن الاستجابة في النسبة المئوية 95 عبر نقاط النهاية الأساسية",
+    "response_time_sub": "النسبة المئوية الـ95",
+
+    "ai_flow_performance_title": "أداء مسارات الذكاء الاصطناعي",
+    "ai_flow_performance_desc": "تفصيل أداء كل مسار.",
+    "ai_flow_sub": "عدد استدعاءات المسارات وزمن الاستجابة",
+
+    "flow_name": "اسم المسار",
+    "invocations": "الاستدعاءات",
+    "avg_latency": "متوسط زمن الاستجابة",
+    "success_rate": "معدل النجاح",
+
+    "th_flow_name": "اسم المسار",
+    "th_invocations": "الاستدعاءات",
+    "th_avg_latency": "متوسط الزمن",
+    "th_success_rate": "معدل النجاح"
   },
   "widget": {
     "open_chat": "افتح الدردشة",

@@ -2,50 +2,35 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import type { SupportedLang } from "@/lib/dictionaries";
+import { KnowledgeBase, KnowledgeBaseSource } from "@prisma/client";
 import { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, MoreHorizontal } from "lucide-react";
-import toast from "react-hot-toast";
+import { ArrowUpDown } from "lucide-react";
+import { Avatar, AvatarImage } from "../ui/avatar";
 
-export type KBRow = {
-  id: string;
-  name?: string | null;
-  status: "published" | "draft" | "archived" | string;
-  ownerId?: string | null;
-  ownerName?: string | null;
-  createdAt: string | Date;
-  updatedAt: string | Date;
-};
+export type KBWithOwner = KnowledgeBase & {
+  user: {
+    id: string;
+    name: string | null;
+    image: string | null;
+    email: string;
+  };
+} & { status: KnowledgeBaseSource };
 
 interface ColumnsProps {
   t: Record<string, string>;
   lang: SupportedLang;
   locale: string;
-  onView: (row: KBRow) => void;
-  onEdit: (row: KBRow) => void;
-  onDelete: (id: string) => void;
 }
 
-function statusBadge(t: Record<string, string>, status: string) {
-  switch (status) {
-    case "published":
-      return (
-        <Badge variant="default">{t.status_published ?? "Published"}</Badge>
-      );
-    case "draft":
-      return <Badge>{t.status_draft ?? "Draft"}</Badge>;
-    case "archived":
-      return (
-        <Badge variant="secondary">{t.status_archived ?? "Archived"}</Badge>
-      );
-    default:
-      return <Badge>{status}</Badge>;
+function sourceBadge(t: Record<string, string>, source: KnowledgeBaseSource) {
+  switch (source) {
+    case "URL":
+      return <Badge variant="default">URL</Badge>;
+    case "UPLOAD":
+      return <Badge variant="secondary">UPLOAD</Badge>;
+    case "MANUAL":
+      return <Badge variant="outline">MANUAL</Badge>;
   }
 }
 
@@ -53,17 +38,14 @@ export function columns({
   t,
   lang,
   locale,
-  onView,
-  onEdit,
-  onDelete,
-}: ColumnsProps): ColumnDef<KBRow>[] {
+}: ColumnsProps): ColumnDef<KBWithOwner>[] {
   const isRtl = lang === "ar";
 
   return [
     {
       id: "kb",
       accessorFn: (row) =>
-        `${row.name ?? ""} ${row.ownerName ?? ""} ${row.id ?? ""}`,
+        `${row.title ?? ""} ${row.user.name ?? ""} ${row.id ?? ""}`,
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_name}
@@ -71,26 +53,45 @@ export function columns({
         </Button>
       ),
       cell: ({ row }) => (
-        <div className="font-medium">{row.original.name ?? "—"}</div>
+        <div className="font-medium">{row.original.title ?? "—"}</div>
       ),
       enableGlobalFilter: true,
     },
     {
-      accessorKey: "ownerName",
+      id: "owner",
+      accessorFn: (row) => `${row.user.name ?? ""} ${row.user.email}`,
       header: ({ column }) => (
         <Button variant="ghost" onClick={() => column.toggleSorting()}>
           {t.th_owner}
           <ArrowUpDown className="ml-2 h-4 w-4" />
         </Button>
       ),
-      cell: ({ row }) => row.getValue("ownerName") ?? "—",
+      cell: ({ row }) => {
+        return (
+          <div className="flex items-center gap-2">
+            <Avatar className="h-8 w-8">
+              <AvatarImage
+                src={row.original.user.image ?? "/images/avatar.png"}
+                alt={row.original.user.name ?? "User"}
+              />
+            </Avatar>
+            <div>
+              <div className="font-medium">{row.original.user.name ?? "—"}</div>
+              <div className="text-muted-foreground text-xs">
+                {row.original.user.email ?? "—"}
+              </div>
+            </div>
+          </div>
+        );
+      },
+      enableGlobalFilter: true,
     },
     {
       accessorKey: "status",
-      header: t.th_status,
+      header: t.th_source,
       cell: ({ row }) => {
-        const status = String(row.getValue("status") ?? "draft");
-        return statusBadge(t, status);
+        const source = row.original.source as KnowledgeBaseSource;
+        return sourceBadge(t, source);
       },
       filterFn: "equalsString",
     },
@@ -108,51 +109,6 @@ export function columns({
         return date && !isNaN(date.getTime())
           ? date.toLocaleString(locale)
           : "—";
-      },
-    },
-    {
-      id: "actions",
-      header: "",
-      cell: ({ row }) => {
-        const kb = row.original;
-        return (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">
-                  {lang === "ar" ? "فتح القائمة" : "Open menu"}
-                </span>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-
-            <DropdownMenuContent align={isRtl ? "start" : "end"}>
-              <DropdownMenuItem onClick={() => onView(kb)}>
-                {t.view_button}
-              </DropdownMenuItem>
-
-              <DropdownMenuItem onClick={() => onEdit(kb)}>
-                {t.edit_button}
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                onClick={() => {
-                  navigator.clipboard.writeText(kb.id);
-                  toast.success(t.toast_copied);
-                }}
-              >
-                {t.copy_button}
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                onClick={() => onDelete(kb.id)}
-                className="text-destructive"
-              >
-                {t.delete_button}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        );
       },
     },
   ];

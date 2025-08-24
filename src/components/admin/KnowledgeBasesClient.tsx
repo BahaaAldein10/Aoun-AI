@@ -9,17 +9,19 @@ import { cn } from "@/lib/utils";
 import { Table } from "@tanstack/react-table";
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { KBRow, columns as makeColumns } from "./KnowledgeBasesColumns";
+import { KBWithOwner, columns as makeColumns } from "./KnowledgeBasesColumns";
 
 interface Props {
-  initialKbs?: KBRow[];
+  initialKbs?: KBWithOwner[];
   lang: SupportedLang;
   dict: Dictionary;
 }
 
 const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
-  const [tableInstance, setTableInstance] = useState<Table<KBRow> | null>(null);
-  const [rows, setRows] = useState<KBRow[]>(initialKbs);
+  const [tableInstance, setTableInstance] = useState<Table<KBWithOwner> | null>(
+    null,
+  );
+  const [rows, setRows] = useState<KBWithOwner[]>(initialKbs);
 
   const t: Record<string, string> = dict.admin_knowledge_bases;
   const locale = lang === "ar" ? "ar" : "en-US";
@@ -43,18 +45,23 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
     toast.success(t.toast_exported);
   }
 
-  function handleView(kb: KBRow) {
-    toast(t.toast_view_placeholder.replace("{name}", kb.name ?? kb.id));
+  // ---------- PLACEHOLDER STATS ----------
+  // Replace these with real values fetched from an API/DB when available.
+  const totalCachedItems = 0;
+  const totalRequests = 0;
+  const hitCount = 0;
+  const totalAudioBytes = 0; // bytes
+
+  const cacheHitRate = totalRequests > 0 ? hitCount / totalRequests : 0;
+
+  function formatBytesToMB(bytes: number) {
+    return (bytes / 1024 / 1024).toFixed(2);
   }
 
-  function handleEdit(kb: KBRow) {
-    toast(t.toast_edit_placeholder.replace("{name}", kb.name ?? kb.id));
+  function formatPercent(frac: number) {
+    return `${(frac * 100).toFixed(0)}%`;
   }
-
-  function handleDelete(kbId: string) {
-    setRows((prev) => prev.filter((r) => r.id !== kbId));
-    toast.success(t.toast_deleted);
-  }
+  // ---------------------------------------
 
   return (
     <div className="space-y-6">
@@ -67,6 +74,89 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
         <Button onClick={exportJson}>{t.export_json}</Button>
       </div>
 
+      {/* ---------- STATS CARDS: insert here ---------- */}
+      <div
+        className={cn(
+          "grid gap-4",
+          "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
+          isRtl && "rtl:text-right",
+        )}
+      >
+        {/* Total Cached Items */}
+        <Card className="p-4">
+          <CardHeader className="p-0">
+            <CardTitle className="text-sm font-medium">
+              {t.cache_total_items_title ??
+                t.cache_total_items_title ??
+                "Total Cached Items"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="mt-2 p-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-semibold">
+                {new Intl.NumberFormat(locale).format(totalCachedItems)}
+              </div>
+            </div>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {t.cache_total_items_desc ??
+                t.cache_total_items_desc ??
+                "Total unique responses stored."}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Cache Hit Rate */}
+        <Card className="p-4">
+          <CardHeader className="p-0">
+            <CardTitle className="text-sm font-medium">
+              {t.cache_hit_rate_title ??
+                t.cache_hit_rate_title ??
+                "Cache Hit Rate"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="mt-2 p-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-semibold">
+                {formatPercent(cacheHitRate)}
+              </div>
+              <div className="text-muted-foreground text-sm">
+                {new Intl.NumberFormat(locale).format(totalRequests)}{" "}
+                {t.cache_requests_label ?? t.cache_requests_label ?? "requests"}
+              </div>
+            </div>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {t.cache_hit_rate_desc ??
+                t.cache_hit_rate_desc ??
+                "Of 0 total requests."}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Total Audio Size */}
+        <Card className="p-4">
+          <CardHeader className="p-0">
+            <CardTitle className="text-sm font-medium">
+              {t.cache_audio_size_title ??
+                t.cache_audio_size_title ??
+                "Total Audio Size"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="mt-2 p-0">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xl font-semibold">
+                {formatBytesToMB(totalAudioBytes)} MB
+              </div>
+            </div>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {t.cache_audio_size_desc ??
+                t.cache_audio_size_desc ??
+                "Total size of cached audio files."}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+      {/* ---------- /STATS CARDS ---------- */}
+
       <Card className={cn("w-full", isRtl && "rtl:text-right")}>
         <CardHeader>
           <CardTitle>{t.table_title}</CardTitle>
@@ -78,9 +168,6 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
               t,
               lang,
               locale,
-              onView: handleView,
-              onEdit: handleEdit,
-              onDelete: handleDelete,
             })}
             data={rows}
             lang={lang}
@@ -90,7 +177,8 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
             nextButton={t.next_button}
             onTableReady={setTableInstance}
             initialPageSize={20}
-            getStatus={(r: KBRow) => r.status ?? "draft"}
+            showStatusFilter
+            getStatus={(r: KBWithOwner) => r.status ?? "MANUAL"}
           />
         </CardContent>
       </Card>
