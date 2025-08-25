@@ -40,11 +40,12 @@ enum LeadStatus {
 enum IntegrationType {
   WHATSAPP
   MESSENGER
-  FACEBOOK
+  INSTAGRAM
   GOOGLE_CALENDAR
-  MICROSOFT_CALENDAR
-  SALESFORCE
   GOOGLE_SHEETS
+  MICROSOFT_OUTLOOK
+  SALESFORCE
+  HUBSPOT
 }
 
 enum SubscriptionStatus {
@@ -263,6 +264,7 @@ model Integration {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, provider, type])
   @@index([userId])
 }
 
