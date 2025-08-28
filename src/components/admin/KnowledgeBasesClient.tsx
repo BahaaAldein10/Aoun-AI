@@ -178,7 +178,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
             onTableReady={setTableInstance}
             initialPageSize={20}
             showStatusFilter
-            getStatus={(r: KBWithOwner) => r.status ?? "MANUAL"}
+            getStatus={(r: KBWithOwner) => r.status}
           />
         </CardContent>
       </Card>

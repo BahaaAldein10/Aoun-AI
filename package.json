@@ -47,6 +47,7 @@
     "clsx": "^2.1.1",
     "firebase": "^12.1.0",
     "firebase-admin": "^13.4.0",
+    "framer-motion": "^12.23.12",
     "ioredis": "^5.7.0",
     "jsdom": "^26.1.0",
     "lucide-react": "^0.536.0",

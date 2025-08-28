@@ -6,6 +6,7 @@ import type { SupportedLang } from "@/lib/dictionaries";
 import { KnowledgeBase, KnowledgeBaseSource } from "@prisma/client";
 import { ColumnDef } from "@tanstack/react-table";
 import { ArrowUpDown } from "lucide-react";
+import { KbMetadata } from "../dashboard/KnowledgeBaseClient";
 import { Avatar, AvatarImage } from "../ui/avatar";
 
 export type KBWithOwner = KnowledgeBase & {
@@ -15,23 +16,12 @@ export type KBWithOwner = KnowledgeBase & {
     image: string | null;
     email: string;
   };
-} & { status: KnowledgeBaseSource };
+} & { status: "URL" | "UPLOAD" };
 
 interface ColumnsProps {
   t: Record<string, string>;
   lang: SupportedLang;
   locale: string;
-}
-
-function sourceBadge(t: Record<string, string>, source: KnowledgeBaseSource) {
-  switch (source) {
-    case "URL":
-      return <Badge variant="default">URL</Badge>;
-    case "UPLOAD":
-      return <Badge variant="secondary">UPLOAD</Badge>;
-    case "MANUAL":
-      return <Badge variant="outline">MANUAL</Badge>;
-  }
 }
 
 export function columns({
@@ -90,8 +80,9 @@ export function columns({
       accessorKey: "status",
       header: t.th_source,
       cell: ({ row }) => {
-        const source = row.original.source as KnowledgeBaseSource;
-        return sourceBadge(t, source);
+        const metadata = row.original.metadata as KbMetadata;
+        const source = metadata?.url ? "URL" : "UPLOAD";
+        return <Badge variant="outline">{source}</Badge>;
       },
       filterFn: "equalsString",
     },

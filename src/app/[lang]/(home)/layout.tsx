@@ -1,5 +1,6 @@
 import Footer from "@/components/layout/Footer";
 import Header from "@/components/layout/Header";
+import VoiceChatFloatingWidget from "@/components/shared/VoiceChatFloatingWidget";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
 import { Metadata } from "next";
 import { ReactNode } from "react";
@@ -24,11 +25,14 @@ export default async function HomeLayout({
   children: ReactNode;
   params: Promise<{ lang: SupportedLang }>;
 }) {
+  const { lang } = await params;
+
   return (
     <>
       <Header params={params} />
       {children}
       <Footer params={params} />
+      <VoiceChatFloatingWidget lang={lang} />
     </>
   );
 }

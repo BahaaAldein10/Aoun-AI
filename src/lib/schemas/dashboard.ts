@@ -14,17 +14,21 @@ export type SettingsFormValues = z.infer<ReturnType<typeof settingsSchema>>;
 
 export const setupSchema = (dict: Dictionary) =>
   z.object({
-    botName: z.string().min(2, {
-      message: dict.dashboard_setup.bot_name_placeholder,
-    }),
-    url: z.url().optional().nullable(),
-    personality: z.string().optional().nullable(),
-    voice: z.string().optional(),
-    primaryColor: z.string().optional(),
-    accentColor: z.string().optional(),
+    botName: z.string().min(1, "Bot name is required"),
+    url: z.url().optional().or(z.literal("")),
+    personality: z.string().optional(),
+    voice: z.string().min(1, "Please select a voice"),
+    primaryColor: z.string().regex(/^#([0-9A-F]{3}){1,2}$/i, "Invalid color"),
+    accentColor: z.string().regex(/^#([0-9A-F]{3}){1,2}$/i, "Invalid color"),
     faq: z
-      .array(z.object({ question: z.string(), answer: z.string() }))
+      .array(
+        z.object({
+          question: z.string(),
+          answer: z.string(),
+        }),
+      )
       .optional(),
+    files: z.array(z.url()).optional(),
   });
 
 export type SetupFormValues = z.infer<ReturnType<typeof setupSchema>>;

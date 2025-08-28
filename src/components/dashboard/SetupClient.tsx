@@ -18,50 +18,53 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dictionary } from "@/contexts/dictionary-context";
-import { saveFileToDB } from "@/lib/actions/dashboard";
+import { createKb, saveFileToDB, updateKb } from "@/lib/actions/dashboard";
 import { SupportedLang } from "@/lib/dictionaries";
 import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Document, KnowledgeBase } from "@prisma/client";
 import {
   FileText,
   Link as LinkIcon,
-  Mic,
   Palette,
   PlusCircle,
   Sprout,
   Trash2,
   Upload,
-  Volume2,
   Wand2,
 } from "lucide-react";
 import React, { useRef, useState } from "react";
-import { Controller, useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 import Spinner from "../shared/Spinner";
+import VoiceIntegrationTab, { availableVoices } from "./VoiceIntegrationTab";
 
-/* --- voices (UI only) --- */
-const availableVoices = [
-  { name: "Algenib", gender: "Female" },
-  { name: "Andromeda", gender: "Male" },
-  { name: "Perseus", gender: "Male" },
-  { name: "Sirius", gender: "Female" },
-];
+type initialKb = KnowledgeBase & {
+  documents: Document[];
+};
+
+type KbMetadata = {
+  personality?: string | null;
+  voice?: string | null;
+  primaryColor?: string | null;
+  accentColor?: string | null;
+  faq?: { question: string; answer: string }[] | null;
+  url?: string | null;
+  files?: string[] | null;
+} | null;
 
 const SetupClient = ({
+  initialKb,
+  hasKb,
   lang,
   dict,
 }: {
+  initialKb: initialKb | null;
+  hasKb: boolean;
   lang: SupportedLang;
   dict: Dictionary;
 }) => {
@@ -78,23 +81,33 @@ const SetupClient = ({
   const t = dict.dashboard_setup;
   const websiteDataRef = useRef<HTMLInputElement | null>(null);
 
+  const metadata = initialKb?.metadata as KbMetadata | null;
+
   const form = useForm<SetupFormValues>({
     resolver: zodResolver(setupSchema(dict)),
     defaultValues: {
-      botName: "Aoun",
-      url: "",
-      personality: "",
-      voice: availableVoices[0].name,
-      primaryColor: "#29ABE2",
-      accentColor: "#29E2C2",
-      faq: [{ question: "", answer: "" }],
+      botName: initialKb?.title || "",
+      url: metadata?.url || "",
+      personality: metadata?.personality || "",
+      voice:
+        availableVoices.find((v) => v.name === metadata?.voice)?.name ||
+        availableVoices[0].name,
+      primaryColor: metadata?.primaryColor || "#29ABE2",
+      accentColor: metadata?.accentColor || "#29E2C2",
+      faq: metadata?.faq || [
+        {
+          question: "",
+          answer: "",
+        },
+      ],
+      files: metadata?.files || [],
     },
   });
 
   const {
     handleSubmit,
     control,
-    formState: { isSubmitting },
+    formState: { isSubmitting, errors },
   } = form;
 
   const { fields, append, remove } = useFieldArray({
@@ -158,6 +171,7 @@ const SetupClient = ({
 
       // Keep URL for UI
       setUrl(downloadURL);
+      form.setValue("files", [downloadURL]);
 
       // 2) Persist uploadedFile record in DB (server action)
       const result = await saveFileToDB({
@@ -190,84 +204,101 @@ const SetupClient = ({
     }
   };
 
-  const handleTestVoice = () => {};
-
   async function onSubmit(values: SetupFormValues) {
-    // Ensure URL present
-    const url = values.url?.trim();
-    if (!url) {
-      toast.error("Please enter a valid URL to crawl.");
+    if (!values.url && (!values.files || values.files.length === 0)) {
+      toast.error("Provide a URL or upload at least one file");
       return;
     }
 
-    // Reset local status for new ingestion
-    setIngestStatus(null);
-    setIngestError(null);
-    setKbId(null);
+    const metadata = {
+      personality: values.personality,
+      voice: values.voice,
+      primaryColor: values.primaryColor,
+      accentColor: values.accentColor,
+      faq: values.faq || [],
+      url: values.url || null,
+      files: values.files || [],
+    };
 
     try {
-      const res = await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url,
-          kbTitle: values.botName
-            ? `${values.botName} - ${new URL(url).hostname}`
-            : undefined,
-          pageLimit: 1,
-        }),
-      });
-
-      // try to parse json body
-      let body = null;
-      try {
-        body = await res.json();
-      } catch {
-        body = null;
+      if (hasKb) {
+        const res = await updateKb({ ...metadata, title: values.botName });
+        toast.success("Knowledge Base updated.");
+        return res;
+      } else {
+        const res = await createKb({ ...metadata, title: values.botName });
+        toast.success("Knowledge Base created.");
+        return res;
       }
-
-      if (!res.ok) {
-        // server returned an error
-        const errMsg = body?.error ?? `Server returned ${res.status}`;
-        setIngestStatus("failed");
-        setIngestError(errMsg);
-        toast.error(errMsg);
-        return;
+    } catch (error: unknown) {
+      console.error("Failed to create/update Knowledge Base", error);
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("An unexpected error occurred");
       }
-
-      // If server accepted and queued the job
-      if (res.status === 202) {
-        setIngestStatus("queued");
-        if (body?.kbId) setKbId(body.kbId);
-        toast.success(
-          body?.message ??
-            "Ingestion queued. We will notify you when it finishes.",
-        );
-        return;
-      }
-
-      // If server did the ingestion synchronously and returned success
-      if (body?.success) {
-        setIngestStatus("done");
-        if (body.kbId) setKbId(body.kbId);
-        const pages = body.pages ?? 0;
-        const chunks = body.chunks ?? 0;
-        toast.success(
-          `Ingestion complete — ${pages} page(s), ${chunks} chunk(s) created.`,
-        );
-        return;
-      }
-
-      // Fallback for unknown but OK response
-      setIngestStatus("done");
-      toast.success(body?.message ?? "Ingestion finished.");
-    } catch (err) {
-      console.error("ingest-url error:", err);
-      const msg = err instanceof Error ? err.message : String(err);
-      setIngestStatus("failed");
-      setIngestError(msg);
-      toast.error("Ingestion failed. See console for details.");
     }
+
+    // try {
+    //   const res = await fetch("/api/ingest", {
+    //     method: "POST",
+    //     headers: { "Content-Type": "application/json" },
+    //     body: JSON.stringify({
+    //       url,
+    //       kbTitle: values.botName
+    //         ? `${values.botName} - ${new URL(url).hostname}`
+    //         : undefined,
+    //       pageLimit: 1,
+    //     }),
+    //   });
+
+    //   // try to parse json body
+    //   let body = null;
+    //   try {
+    //     body = await res.json();
+    //   } catch {
+    //     body = null;
+    //   }
+
+    //   if (!res.ok) {
+    //     // server returned an error
+    //     const errMsg = body?.error ?? `Server returned ${res.status}`;
+    //     setIngestStatus("failed");
+    //     setIngestError(errMsg);
+    //     toast.error(errMsg);
+    //     return;
+    //   }
+
+    //   // If server accepted and queued the job
+    //   if (res.status === 202) {
+    //     setIngestStatus("queued");
+    //     if (body?.kbId) setKbId(body.kbId);
+    //     toast.success(
+    //       body?.message ??
+    //         "Ingestion queued. We will notify you when it finishes.",
+    //     );
+    //     return;
+    //   }
+
+    //   // If server did the ingestion synchronously and returned success
+    //   if (body?.success) {
+    //     setIngestStatus("done");
+    //     if (body.kbId) setKbId(body.kbId);
+    //     const pages = body.pages ?? 0;
+    //     const chunks = body.chunks ?? 0;
+    //     toast.success(
+    //       `Ingestion complete — ${pages} page(s), ${chunks} chunk(s) created.`,
+    //     );
+    //     return;
+    //   }
+
+    //   // Fallback for unknown but OK response
+    //   setIngestStatus("done");
+    //   toast.success(body?.message ?? "Ingestion finished.");
+    // } catch (err) {
+    //   const msg = err instanceof Error ? err.message : String(err);
+    //   toast.error("Ingestion failed. See console for details.");
+    // }
   }
 
   const addFaq = () => append({ question: "", answer: "" });
@@ -283,6 +314,10 @@ const SetupClient = ({
             <Sprout className="text-primary" /> {t.title}
           </CardTitle>
           <CardDescription>{t.description}</CardDescription>
+
+          {errors.root?.message && (
+            <div className="text-red-500">{errors.root.message}</div>
+          )}
         </CardHeader>
 
         <CardContent>
@@ -315,6 +350,64 @@ const SetupClient = ({
                     <Palette className="mr-2" />
                     {t.appearance_tab}
                   </TabsTrigger>
+                  <TabsTrigger value="voice" className="cursor-pointer">
+                    <Wand2 className="mr-2" />
+                    {t.custom_voice_tab}
+                  </TabsTrigger>
+                </TabsList>
+
+                {/* Tablet / Large phones: split into two rows of 2 (visible only when lg:hidden) */}
+                <TabsList className="grid w-full grid-cols-2 max-sm:hidden lg:hidden">
+                  <TabsTrigger value="url" className="cursor-pointer">
+                    <LinkIcon className="mr-2" />
+                    {t.generate_from_url}
+                  </TabsTrigger>
+                  <TabsTrigger value="upload" className="cursor-pointer">
+                    <Upload className="mr-2" />
+                    {t.upload_documents}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-3 max-sm:hidden lg:hidden">
+                  <TabsTrigger value="manual" className="cursor-pointer">
+                    <FileText className="mr-2" />
+                    {t.manual_qa}
+                  </TabsTrigger>
+                  <TabsTrigger value="appearance" className="cursor-pointer">
+                    <Palette className="mr-2" />
+                    {t.appearance_tab}
+                  </TabsTrigger>
+                  <TabsTrigger value="voice" className="cursor-pointer">
+                    <Wand2 className="mr-2" />
+                    {t.custom_voice_tab}
+                  </TabsTrigger>
+                </TabsList>
+
+                {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
+                  <TabsTrigger value="url" className="cursor-pointer">
+                    <LinkIcon className="mr-2" />
+                    {t.generate_from_url}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
+                  <TabsTrigger value="upload" className="cursor-pointer">
+                    <Upload className="mr-2" />
+                    {t.upload_documents}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
+                  <TabsTrigger value="manual" className="cursor-pointer">
+                    <FileText className="mr-2" />
+                    {t.manual_qa}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
+                  <TabsTrigger value="appearance" className="cursor-pointer">
+                    <Palette className="mr-2" />
+                    {t.appearance_tab}
+                  </TabsTrigger>
+                </TabsList>
+                <TabsList className="grid w-full grid-cols-1 sm:hidden">
                   <TabsTrigger value="voice" className="cursor-pointer">
                     <Wand2 className="mr-2" />
                     {t.custom_voice_tab}
@@ -625,101 +718,19 @@ const SetupClient = ({
 
                 {/* Voice Tab */}
                 <TabsContent value="voice" className="pt-6">
-                  <div className="space-y-4 rtl:text-right">
-                    <CardHeader className="mb-4 p-0 rtl:text-right">
-                      <CardTitle className="flex items-center gap-2">
-                        <Wand2 className="text-primary" /> {t.voice_clone_title}
-                      </CardTitle>
-                      <CardDescription>{t.voice_clone_desc}</CardDescription>
-                    </CardHeader>
-
-                    <FormField
-                      control={control}
-                      name="voice"
-                      render={() => (
-                        <FormItem>
-                          <FormLabel>{t.bot_voice}</FormLabel>
-                          <div className="flex gap-2">
-                            <FormControl>
-                              <Controller
-                                control={control}
-                                name="voice"
-                                render={({ field: cField }) => (
-                                  <Select
-                                    value={cField.value}
-                                    onValueChange={cField.onChange}
-                                    dir={dir}
-                                  >
-                                    <SelectTrigger
-                                      id="voice"
-                                      className="min-w-[180px] cursor-pointer"
-                                    >
-                                      <SelectValue
-                                        placeholder={t.bot_voice_placeholder}
-                                      />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {availableVoices.map((v) => (
-                                        <SelectItem key={v.name} value={v.name}>
-                                          <div className="flex items-center gap-2">
-                                            <span>{v.name}</span>
-                                            <span className="text-muted-foreground text-xs">
-                                              ({v.gender})
-                                            </span>
-                                          </div>
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                )}
-                              />
-                            </FormControl>
-
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={handleTestVoice}
-                              // disabled={isTestingVoice}
-                            >
-                              <Volume2 className="h-4 w-4 rtl:scale-x-[-1] rtl:transform" />
-                            </Button>
-                          </div>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    <div className="rounded-lg border-2 border-dashed p-6 text-center">
-                      <p className="text-muted-foreground mb-4">
-                        {t.voice_clone_prompt}
-                      </p>
-                      <Button
-                        type="button"
-                        size="lg"
-                        onClick={() =>
-                          toast(t.voice_clone_record_button + " — Coming soon")
-                        }
-                      >
-                        <Mic className="mr-2" /> {t.voice_clone_record_button}
-                      </Button>
-                    </div>
-                  </div>
+                  <VoiceIntegrationTab control={control} dir={dir} t={t} />
                 </TabsContent>
               </Tabs>
 
               <CardFooter className="px-0 pt-6">
                 <div className="flex justify-end">
-                  {/* <Button type="submit" disabled={isSubmitting || isCrawling}>
-                    {isCrawling
-                      ? (t.crawling_button ?? "Reading website...")
-                      : (t.generate_button ?? "Create Knowledge Base")}
-                  </Button> */}
                   <Button type="submit" disabled={isSubmitting}>
                     {isSubmitting ? (
                       <>
                         <Spinner /> {t.generate_button}
                       </>
+                    ) : hasKb ? (
+                      t.update_button
                     ) : (
                       t.generate_button
                     )}

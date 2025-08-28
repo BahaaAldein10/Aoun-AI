@@ -180,31 +180,31 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
             </TabsList>
 
             {/* Small phones: each tab in its own full-width TabsList (visible only when lg:hidden) */}
-            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+            <TabsList className="grid w-full grid-cols-1 sm:hidden">
               <TabsTrigger value="messaging" className="cursor-pointer">
                 <MessageSquare className="mr-2" />
                 {t.messaging_tab}
               </TabsTrigger>
             </TabsList>
-            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+            <TabsList className="grid w-full grid-cols-1 sm:hidden">
               <TabsTrigger value="website" className="cursor-pointer">
                 <Globe className="mr-2" />
                 {t.website_tab}
               </TabsTrigger>
             </TabsList>
-            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+            <TabsList className="grid w-full grid-cols-1 sm:hidden">
               <TabsTrigger value="api_docs" className="cursor-pointer">
                 <FileText className="mr-2" />
                 {t.api_docs_tab}
               </TabsTrigger>
             </TabsList>
-            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+            <TabsList className="grid w-full grid-cols-1 sm:hidden">
               <TabsTrigger value="ios" className="cursor-pointer">
                 <Smartphone className="mr-2" />
                 {t.ios_tab}
               </TabsTrigger>
             </TabsList>
-            <TabsList className="grid w-full grid-cols-1 lg:hidden">
+            <TabsList className="grid w-full grid-cols-1 sm:hidden">
               <TabsTrigger value="android" className="cursor-pointer">
                 <Phone className="mr-2" />
                 {t.android_tab}
