@@ -54,7 +54,6 @@ export async function saveFileToDB({
   fileName,
   fileType,
   fileSize,
-  lang,
 }: SaveFileParams) {
   try {
     const session = await auth();
@@ -62,8 +61,6 @@ export async function saveFileToDB({
       return { success: false, error: "Not authenticated" };
     }
 
-    // Create uploadedFile with ingestStatus = 'pending'
-    const initialMeta = { lang, ingestStatus: "pending" };
     const file = await prisma.uploadedFile.create({
       data: {
         userId: session.user.id,
@@ -71,61 +68,8 @@ export async function saveFileToDB({
         filename: fileName,
         fileType: fileType ?? null,
         size: fileSize,
-        meta: initialMeta,
       },
     });
-
-    // Trigger ingest server-side (server action). We'll call our own /api/ingest route.
-    try {
-      // Use absolute URL when calling internal API from server runtime (safer)
-      const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-      const res = await fetch(`${base}/api/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadedFileId: file.id }),
-      });
-
-      if (!res.ok) {
-        // read text for better error info
-        const errText = await res.text().catch(() => null);
-        await prisma.uploadedFile.update({
-          where: { id: file.id },
-          data: {
-            meta: {
-              ...((file.meta as object) ?? {}),
-              ingestStatus: "failed",
-              ingestError: errText ?? `status:${res.status}`,
-            },
-          },
-        });
-      } else {
-        // queued successfully
-        const body = await res.json().catch(() => ({}));
-        await prisma.uploadedFile.update({
-          where: { id: file.id },
-          data: {
-            meta: {
-              ...((file.meta as object) ?? {}),
-              ingestStatus: "queued",
-              queuedAt: new Date().toISOString(),
-              kbId: body.kbId ?? null,
-            },
-          },
-        });
-      }
-    } catch (e) {
-      console.error("Failed calling /api/ingest:", e);
-      await prisma.uploadedFile.update({
-        where: { id: file.id },
-        data: {
-          meta: {
-            ...((file.meta as object) ?? {}),
-            ingestStatus: "failed",
-            ingestError: String((e as Error)?.message ?? e),
-          },
-        },
-      });
-    }
 
     return { success: true, file };
   } catch (error) {

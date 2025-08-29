@@ -22,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dictionary } from "@/contexts/dictionary-context";
 import { createKb, saveFileToDB, updateKb } from "@/lib/actions/dashboard";
+import { qstash } from "@/lib/actions/qstash";
 import { SupportedLang } from "@/lib/dictionaries";
 import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
 import { cn } from "@/lib/utils";
@@ -71,12 +72,6 @@ const SetupClient = ({
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [url, setUrl] = useState("");
-
-  // NEW: states for ingestion
-  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
-  const [ingestStatus, setIngestStatus] = useState<string | null>(null);
-  const [ingestError, setIngestError] = useState<string | null>(null);
-  const [kbId, setKbId] = useState<string | null>(null);
 
   const t = dict.dashboard_setup;
   const websiteDataRef = useRef<HTMLInputElement | null>(null);
@@ -139,10 +134,6 @@ const SetupClient = ({
     }
 
     setUploading(true);
-    setIngestStatus(null);
-    setIngestError(null);
-    setUploadedFileId(null);
-    setKbId(null);
 
     try {
       // 1) Upload file to storage endpoint
@@ -188,12 +179,6 @@ const SetupClient = ({
         return;
       }
 
-      // 3) Update UI to reflect enqueue/queued state
-      setUploadedFileId(result.file.id);
-      setIngestStatus("queued"); // queued until worker picks it up
-      setIngestError(null);
-      setKbId(null);
-
       toast.success("Upload saved. Ingestion will start shortly.");
       setFile(null);
     } catch (err) {
@@ -228,6 +213,9 @@ const SetupClient = ({
       } else {
         const res = await createKb({ ...metadata, title: values.botName });
         toast.success("Knowledge Base created.");
+
+        await qstash(res);
+        
         return res;
       }
     } catch (error: unknown) {
@@ -238,67 +226,6 @@ const SetupClient = ({
         toast.error("An unexpected error occurred");
       }
     }
-
-    // try {
-    //   const res = await fetch("/api/ingest", {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({
-    //       url,
-    //       kbTitle: values.botName
-    //         ? `${values.botName} - ${new URL(url).hostname}`
-    //         : undefined,
-    //       pageLimit: 1,
-    //     }),
-    //   });
-
-    //   // try to parse json body
-    //   let body = null;
-    //   try {
-    //     body = await res.json();
-    //   } catch {
-    //     body = null;
-    //   }
-
-    //   if (!res.ok) {
-    //     // server returned an error
-    //     const errMsg = body?.error ?? `Server returned ${res.status}`;
-    //     setIngestStatus("failed");
-    //     setIngestError(errMsg);
-    //     toast.error(errMsg);
-    //     return;
-    //   }
-
-    //   // If server accepted and queued the job
-    //   if (res.status === 202) {
-    //     setIngestStatus("queued");
-    //     if (body?.kbId) setKbId(body.kbId);
-    //     toast.success(
-    //       body?.message ??
-    //         "Ingestion queued. We will notify you when it finishes.",
-    //     );
-    //     return;
-    //   }
-
-    //   // If server did the ingestion synchronously and returned success
-    //   if (body?.success) {
-    //     setIngestStatus("done");
-    //     if (body.kbId) setKbId(body.kbId);
-    //     const pages = body.pages ?? 0;
-    //     const chunks = body.chunks ?? 0;
-    //     toast.success(
-    //       `Ingestion complete — ${pages} page(s), ${chunks} chunk(s) created.`,
-    //     );
-    //     return;
-    //   }
-
-    //   // Fallback for unknown but OK response
-    //   setIngestStatus("done");
-    //   toast.success(body?.message ?? "Ingestion finished.");
-    // } catch (err) {
-    //   const msg = err instanceof Error ? err.message : String(err);
-    //   toast.error("Ingestion failed. See console for details.");
-    // }
   }
 
   const addFaq = () => append({ question: "", answer: "" });
@@ -511,55 +438,6 @@ const SetupClient = ({
                         </>
                       )}
                     </Button>
-
-                    {/* INGESTION STATUS BANNER */}
-                    {uploadedFileId && (
-                      <div className="mt-4 text-left">
-                        {ingestStatus === "processing" ||
-                        ingestStatus === "pending" ? (
-                          <div className="rounded-md border bg-yellow-50 px-4 py-3">
-                            <strong>Ingestion in progress</strong>
-                            <div className="text-muted-foreground text-sm">
-                              We are extracting and processing the file. This
-                              may take a moment — we&apos;ll update this panel
-                              when finished.
-                            </div>
-                          </div>
-                        ) : ingestStatus === "done" ? (
-                          <div className="rounded-md border bg-green-50 px-4 py-3">
-                            <strong>Ingestion complete</strong>
-                            <div className="text-muted-foreground text-sm">
-                              Knowledge base created.
-                              {kbId && (
-                                <>
-                                  {" "}
-                                  <a
-                                    className="underline"
-                                    href={`/dashboard/kb/${kbId}`}
-                                  >
-                                    Open KB
-                                  </a>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        ) : ingestStatus === "failed" ? (
-                          <div className="rounded-md border bg-red-50 px-4 py-3">
-                            <strong>Ingestion failed</strong>
-                            <div className="text-muted-foreground text-sm">
-                              {ingestError ?? "Something went wrong."}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="rounded-md border bg-gray-50 px-4 py-3">
-                            <strong>Waiting for ingestion</strong>
-                            <div className="text-muted-foreground text-sm">
-                              Queued — will start shortly.
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
 
                     {url && (
                       <p className="mt-3 text-xs break-all">

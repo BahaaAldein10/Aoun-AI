@@ -4,12 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build && tsc -p tsconfig.worker.json",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate",
-    "start:web": "next start -p $PORT",
-    "start:worker": "node dist/workers/worker-ingest.js"
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.10.0",
@@ -40,8 +38,8 @@
     "@tiptap/pm": "^3.2.0",
     "@tiptap/react": "^3.2.0",
     "@tiptap/starter-kit": "^3.2.0",
+    "@upstash/qstash": "^2.8.2",
     "bcryptjs": "^3.0.2",
-    "bullmq": "^5.58.0",
     "cheerio": "^1.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
