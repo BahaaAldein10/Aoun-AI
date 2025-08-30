@@ -195,6 +195,20 @@ const SetupClient = ({
       return;
     }
 
+    // Validate URL if provided
+    if (values.url) {
+      try {
+        const url = new URL(values.url);
+        if (!["http:", "https:"].includes(url.protocol)) {
+          toast.error("URL must use HTTP or HTTPS protocol");
+          return;
+        }
+      } catch {
+        toast.error("Please provide a valid URL");
+        return;
+      }
+    }
+
     const metadata = {
       personality: values.personality,
       voice: values.voice,
@@ -206,28 +220,78 @@ const SetupClient = ({
     };
 
     try {
-      if (hasKb) {
-        const res = await updateKb({ ...metadata, title: values.botName });
-        toast.success("Knowledge Base updated.");
-        return res;
-      } else {
-        const res = await createKb({ ...metadata, title: values.botName });
-        toast.success("Knowledge Base created.");
+      let res;
 
-        await qstash(res);
-        
-        return res;
-      }
-    } catch (error: unknown) {
-      console.error("Failed to create/update Knowledge Base", error);
-      if (error instanceof Error) {
-        toast.error(error.message);
+      if (hasKb) {
+        // Update existing knowledge base
+        res = await updateKb({ ...metadata, title: values.botName });
+        toast.success("Knowledge Base updated.");
       } else {
-        toast.error("An unexpected error occurred");
+        // Create new knowledge base
+        res = await createKb({ ...metadata, title: values.botName });
+        toast.success("Knowledge Base created.");
+      }
+
+      // Start processing jobs (crawling/file processing)
+      if (res) {
+        try {
+          const processingResult = await qstash(res);
+
+          // Show more specific success messages
+          if (
+            processingResult.urlProcessing &&
+            processingResult.filesProcessing > 0
+          ) {
+            toast.success(
+              `Started processing URL and ${processingResult.filesProcessing} file(s). This may take a few minutes.`,
+            );
+          } else if (processingResult.urlProcessing) {
+            toast.success("Started web crawling. This may take a few minutes.");
+          } else if (processingResult.filesProcessing > 0) {
+            toast.success(
+              `Started processing ${processingResult.filesProcessing} file(s). This may take a few minutes.`,
+            );
+          }
+        } catch (processingError) {
+          console.error(
+            "Failed to start background processing:",
+            processingError,
+          );
+          toast.error(
+            "Knowledge Base created but failed to start processing. You can try refreshing or contact support.",
+          );
+        }
+      }
+
+      return res;
+    } catch (error: unknown) {
+      console.error("Failed to create/update Knowledge Base:", error);
+
+      if (error instanceof Error) {
+        // Show more user-friendly error messages
+        if (
+          error.message.includes("network") ||
+          error.message.includes("fetch")
+        ) {
+          toast.error(
+            "Network error. Please check your connection and try again.",
+          );
+        } else if (
+          error.message.includes("validation") ||
+          error.message.includes("invalid")
+        ) {
+          toast.error(
+            "Invalid input data. Please check your entries and try again.",
+          );
+        } else {
+          toast.error(error.message);
+        }
+      } else {
+        toast.error("An unexpected error occurred. Please try again.");
       }
     }
   }
-
+  
   const addFaq = () => append({ question: "", answer: "" });
   const removeFaq = (i: number) => remove(i);
 

@@ -212,13 +212,14 @@ model Document {
 
   kb KnowledgeBase @relation(fields: [kbId], references: [id], onDelete: Cascade)
 
+  @@unique([kbId, sourceUrl])
   @@index([kbId])
 }
 
 model Embedding {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   kbId      String   @db.ObjectId
-  vector    Json // numeric array as JSON
+  vector    Float[] // embedding array
   text      String?
   meta      Json?
   createdAt DateTime @default(now())
