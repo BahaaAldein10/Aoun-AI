@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { processDocumentEmbeddings } from "@/lib/embedding-service";
+import { notifyUserProcessingDone } from "@/lib/lib/notifier";
 import { prisma } from "@/lib/prisma";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 
@@ -186,6 +187,21 @@ async function handler(req: Request) {
       console.log(`- Processed documents: ${processedDocuments}`);
       console.log(`- Created embeddings: ${createdEmbeddings}`);
       console.log(`- Errors: ${errors.length}`);
+
+      try {
+        await notifyUserProcessingDone(userId, kbId, {
+          title: kb.title,
+          pages: processedDocuments,
+          embeddings: createdEmbeddings,
+          link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
+        });
+        console.log(`User ${userId} notified about KB ${kbId} readiness.`);
+      } catch (notifyErr) {
+        console.error(
+          "Failed to notify user about embeddings completion:",
+          notifyErr,
+        );
+      }
 
       return new Response(
         JSON.stringify({

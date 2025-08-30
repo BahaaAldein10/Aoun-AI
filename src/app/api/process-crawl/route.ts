@@ -326,7 +326,7 @@ async function enqueueChild(
 ) {
   try {
     await qstash.publishJSON({
-      url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-crawl`,
+      url: `${process.env.BASE_URL}/api/process-crawl`,
       body: { kbId, webUrl: url, userId, depth },
       delay: Math.floor(Math.random() * 5) + 1, // Random delay 1-5 seconds to spread load
     });
@@ -515,7 +515,7 @@ async function handler(req: Request) {
     try {
       if (savedDocument && savedDocument.id) {
         await qstash.publishJSON({
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-embeddings`,
+          url: `${process.env.BASE_URL}/api/process-embeddings`,
           body: {
             kbId,
             documentId: savedDocument.id,

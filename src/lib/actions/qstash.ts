@@ -19,7 +19,7 @@ export async function qstash(kb: KnowledgeBase) {
 
       // Use the correct start-crawl endpoint instead of process-crawl
       await qstashClient.publishJSON({
-        url: `${process.env.NEXT_PUBLIC_APP_URL}/api/start-crawl`,
+        url: `${process.env.BASE_URL}/api/start-crawl`,
         body: {
           kbId: kb.id,
           userId: kb.userId,
@@ -58,7 +58,7 @@ export async function qstash(kb: KnowledgeBase) {
           }
 
           await qstashClient.publishJSON({
-            url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-file`, // Fixed: use BASE_URL
+            url: `${process.env.BASE_URL}/api/process-file`, // Fixed: use BASE_URL
             body: {
               kbId: kb.id,
               userId: kb.userId,

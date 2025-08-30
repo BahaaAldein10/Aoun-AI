@@ -207,7 +207,7 @@ export async function POST(req: Request) {
           try {
             // enqueue crawl job
             await qstash.publishJSON({
-              url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-crawl`,
+              url: `${process.env.BASE_URL}/api/process-crawl`,
               body: {
                 kbId,
                 webUrl: loc,
@@ -223,7 +223,7 @@ export async function POST(req: Request) {
             // we add a larger delay to give the crawl worker time to save the document
             try {
               await qstash.publishJSON({
-                url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-embeddings`,
+                url: `${process.env.BASE_URL}/api/process-embeddings`,
                 body: {
                   kbId,
                   webUrl: loc,
@@ -274,7 +274,7 @@ export async function POST(req: Request) {
 
     try {
       await qstash.publishJSON({
-        url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-crawl`,
+        url: `${process.env.BASE_URL}/api/process-crawl`,
         body: {
           kbId,
           webUrl: url,
@@ -287,7 +287,7 @@ export async function POST(req: Request) {
       // also enqueue embedding job for the root URL (with a small delay)
       try {
         await qstash.publishJSON({
-          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/process-embeddings`,
+          url: `${process.env.BASE_URL}/api/process-embeddings`,
           body: {
             kbId,
             webUrl: url,
