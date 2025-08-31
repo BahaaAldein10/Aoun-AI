@@ -28,6 +28,7 @@ import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Document, KnowledgeBase } from "@prisma/client";
+import isEqual from "lodash.isequal";
 import {
   FileText,
   Link as LinkIcon,
@@ -58,20 +59,26 @@ type KbMetadata = {
   files?: string[] | null;
 } | null;
 
+const MAX_FILES = 5;
+const MAX_SIZE_MB = 10;
+const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+
 const SetupClient = ({
   initialKb,
   hasKb,
   lang,
   dict,
+  currentUserId,
 }: {
   initialKb: initialKb | null;
   hasKb: boolean;
   lang: SupportedLang;
   dict: Dictionary;
+  currentUserId: string;
 }) => {
-  const [file, setFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [url, setUrl] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
 
   const t = dict.dashboard_setup;
   const websiteDataRef = useRef<HTMLInputElement | null>(null);
@@ -82,6 +89,7 @@ const SetupClient = ({
     resolver: zodResolver(setupSchema(dict)),
     defaultValues: {
       botName: initialKb?.title || "",
+      botDescription: initialKb?.description || "",
       url: metadata?.url || "",
       personality: metadata?.personality || "",
       voice:
@@ -103,6 +111,9 @@ const SetupClient = ({
     handleSubmit,
     control,
     formState: { isSubmitting, errors },
+    getValues,
+    setValue,
+    watch,
   } = form;
 
   const { fields, append, remove } = useFieldArray({
@@ -110,101 +121,166 @@ const SetupClient = ({
     name: "faq",
   });
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setFile(file);
-    } else {
-      setFile(null);
-    }
-  };
+  const existingFormFiles = watch("files") || [];
 
-  const handleUpload = async () => {
-    if (!file) {
-      toast.error("Please select a file first");
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const combined = [...selectedFiles, ...files].slice(0, MAX_FILES);
+    if (files.length > combined.length) {
+      toast.error(
+        t.max_files_allowed.replace("{{count}}", MAX_FILES.toString()),
+      );
+    }
+
+    const tooLarge = combined.find((f) => f.size > MAX_SIZE_BYTES);
+    if (tooLarge) {
+      toast.error(
+        t.file_too_large
+          .replace("{{fileName}}", tooLarge.name)
+          .replace("{{maxSize}}", MAX_SIZE_MB.toString()),
+      );
+      setSelectedFiles(combined.filter((f) => f.size <= MAX_SIZE_BYTES));
       return;
     }
 
-    const MAX_SIZE_MB = 5;
-    const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024;
+    setSelectedFiles(combined);
+  };
 
-    if (file.size > MAX_SIZE_BYTES) {
-      alert(`File is too large! Please select a file under ${MAX_SIZE_MB} MB.`);
+  const removeSelected = (index: number) => {
+    const next = [...selectedFiles];
+    next.splice(index, 1);
+    setSelectedFiles(next);
+  };
+
+  const removeUploadedUrl = (url: string) => {
+    const files = getValues("files") || [];
+    const next = files.filter((f) => f !== url);
+    setValue("files", next);
+  };
+
+  const handleUpload = async () => {
+    if (selectedFiles.length === 0) {
+      toast.error(t.select_files_first);
+      return;
+    }
+
+    const totalExisting = (getValues("files") || []).length;
+    if (totalExisting + selectedFiles.length > MAX_FILES) {
+      toast.error(
+        t.max_files_total.replace("{{maxFiles}}", MAX_FILES.toString()),
+      );
+      return;
+    }
+
+    const userId = currentUserId ?? initialKb?.userId;
+    if (!userId) {
+      toast.error(t.user_id_missing);
       return;
     }
 
     setUploading(true);
+    setUploadProgress(0);
 
+    const uploadedUrls: string[] = [];
     try {
-      // 1) Upload file to storage endpoint
-      const fd = new FormData();
-      fd.append("file", file);
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
 
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: fd,
-      });
+        // size guard
+        if (file.size > MAX_SIZE_BYTES) {
+          toast.error(
+            t.file_exceeds_limit
+              .replace("{{fileName}}", file.name)
+              .replace("{{maxSize}}", MAX_SIZE_MB.toString()),
+          );
+          continue;
+        }
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error("Upload API error", err);
-        toast.error("Upload failed (server).");
-        return;
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("userId", userId);
+
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: fd,
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          console.error("Upload API error", err);
+          toast.error(t.upload_failed.replace("{{fileName}}", file.name));
+          continue;
+        }
+
+        const data = await res.json();
+        const signedUrl = data?.url ?? data?.signedUrl ?? null;
+
+        if (!signedUrl) {
+          console.error("No URL returned from /api/upload", data);
+          toast.error(
+            t.upload_failed_no_url.replace("{{fileName}}", file.name),
+          );
+          continue;
+        }
+
+        const current = getValues("files") || [];
+        const next = [...current, signedUrl];
+        setValue("files", next);
+
+        const saveResult = await saveFileToDB({
+          fileUrl: signedUrl,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+        });
+        if (!saveResult?.success) {
+          console.warn("saveFileToDB failed", saveResult);
+        }
+
+        uploadedUrls.push(signedUrl);
+
+        // update progress
+        setUploadProgress(Math.round(((i + 1) / selectedFiles.length) * 100));
+        toast.success(t.uploaded_file.replace("{{fileName}}", file.name));
       }
 
-      const data = await res.json();
-      const downloadURL = data?.url;
-      if (!downloadURL) {
-        console.error("No URL returned from /api/upload", data);
-        toast.error("Upload failed (no URL).");
-        return;
+      setSelectedFiles([]);
+      if (uploadedUrls.length > 0) {
+        toast.success(
+          t.uploaded_files_success.replace(
+            "{{count}}",
+            uploadedUrls.length.toString(),
+          ),
+        );
+      } else {
+        toast.error(t.no_files_uploaded);
       }
-
-      // Keep URL for UI
-      setUrl(downloadURL);
-      form.setValue("files", [downloadURL]);
-
-      // 2) Persist uploadedFile record in DB (server action)
-      const result = await saveFileToDB({
-        fileUrl: downloadURL,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        lang,
-      });
-
-      if (!result?.success || !result.file?.id) {
-        console.error("Failed to save file metadata:", result);
-        toast.error("Uploaded but failed to save file info.");
-        return;
-      }
-
-      toast.success("Upload saved. Ingestion will start shortly.");
-      setFile(null);
     } catch (err) {
       console.error("Upload failed", err);
-      toast.error("Upload failed. See console for details.");
+      toast.error(t.upload_failed_error);
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
   async function onSubmit(values: SetupFormValues) {
     if (!values.url && (!values.files || values.files.length === 0)) {
-      toast.error("Provide a URL or upload at least one file");
+      toast.error(t.provide_url_or_files);
       return;
     }
 
-    // Validate URL if provided
     if (values.url) {
       try {
         const url = new URL(values.url);
         if (!["http:", "https:"].includes(url.protocol)) {
-          toast.error("URL must use HTTP or HTTPS protocol");
+          toast.error(t.invalid_url_protocol);
           return;
         }
       } catch {
-        toast.error("Please provide a valid URL");
+        toast.error(t.invalid_url);
         return;
       }
     }
@@ -224,12 +300,31 @@ const SetupClient = ({
 
       if (hasKb) {
         // Update existing knowledge base
-        res = await updateKb({ ...metadata, title: values.botName });
-        toast.success("Knowledge Base updated.");
+        res = await updateKb({
+          ...metadata,
+          title: values.botName,
+          description: values.botDescription,
+        });
+        toast.success(t.kb_updated);
       } else {
         // Create new knowledge base
-        res = await createKb({ ...metadata, title: values.botName });
-        toast.success("Knowledge Base created.");
+        res = await createKb({
+          ...metadata,
+          title: values.botName,
+          description: values.botDescription,
+        });
+        toast.success(t.kb_created);
+      }
+
+      const unchangedUrl =
+        metadata.url === (initialKb?.metadata as KbMetadata)?.url;
+      const unchangedFiles = isEqual(
+        metadata.files,
+        (initialKb?.metadata as KbMetadata)?.files,
+      );
+
+      if (unchangedUrl && unchangedFiles) {
+        return res;
       }
 
       // Start processing jobs (crawling/file processing)
@@ -243,13 +338,19 @@ const SetupClient = ({
             processingResult.filesProcessing > 0
           ) {
             toast.success(
-              `Started processing URL and ${processingResult.filesProcessing} file(s). This may take a few minutes.`,
+              t.processing_url_and_files.replace(
+                "{{count}}",
+                processingResult.filesProcessing.toString(),
+              ),
             );
           } else if (processingResult.urlProcessing) {
-            toast.success("Started web crawling. This may take a few minutes.");
+            toast.success(t.processing_url);
           } else if (processingResult.filesProcessing > 0) {
             toast.success(
-              `Started processing ${processingResult.filesProcessing} file(s). This may take a few minutes.`,
+              t.processing_files.replace(
+                "{{count}}",
+                processingResult.filesProcessing.toString(),
+              ),
             );
           }
         } catch (processingError) {
@@ -257,9 +358,7 @@ const SetupClient = ({
             "Failed to start background processing:",
             processingError,
           );
-          toast.error(
-            "Knowledge Base created but failed to start processing. You can try refreshing or contact support.",
-          );
+          toast.error(t.processing_failed);
         }
       }
 
@@ -273,25 +372,21 @@ const SetupClient = ({
           error.message.includes("network") ||
           error.message.includes("fetch")
         ) {
-          toast.error(
-            "Network error. Please check your connection and try again.",
-          );
+          toast.error(t.network_error);
         } else if (
           error.message.includes("validation") ||
           error.message.includes("invalid")
         ) {
-          toast.error(
-            "Invalid input data. Please check your entries and try again.",
-          );
+          toast.error(t.validation_error);
         } else {
           toast.error(error.message);
         }
       } else {
-        toast.error("An unexpected error occurred. Please try again.");
+        toast.error(t.unexpected_error);
       }
     }
   }
-  
+
   const addFaq = () => append({ question: "", answer: "" });
   const removeFaq = (i: number) => remove(i);
 
@@ -432,6 +527,24 @@ const SetupClient = ({
 
                     <FormField
                       control={control}
+                      name="botDescription"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t.bot_description}</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              {...field}
+                              placeholder={t.bot_description_placeholder}
+                              rows={4}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={control}
                       name="url"
                       render={({ field }) => (
                         <FormItem>
@@ -478,39 +591,99 @@ const SetupClient = ({
 
                     <Input
                       type="file"
-                      accept=".pdf,.docx"
+                      accept=".pdf,.docx,.doc"
+                      multiple
                       onChange={handleFileChange}
                       className="cursor-pointer"
                     />
-                    {file && <p className="mt-2 text-sm">{file.name}</p>}
 
-                    <Button
-                      type="button"
-                      size="lg"
-                      onClick={handleUpload}
-                      disabled={uploading}
-                      className="mt-4"
-                    >
-                      {uploading ? (
-                        <>
-                          {/* <Spinner /> {t.uploading ?? "Uploading..."} */}
-                          <Spinner /> {"Uploading..."}
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="mr-2" /> {t.upload_button}
-                        </>
-                      )}
-                    </Button>
-
-                    {url && (
-                      <p className="mt-3 text-xs break-all">
-                        Uploaded URL:{" "}
-                        <a href={url} target="_blank" rel="noreferrer">
-                          {url}
-                        </a>
-                      </p>
+                    {/* Selected (not-yet-uploaded) files */}
+                    {selectedFiles.length > 0 && (
+                      <div className="mt-3 text-sm">
+                        <div className="mb-2 font-medium">
+                          {t.selected_files}
+                        </div>
+                        <ul className="space-y-2">
+                          {selectedFiles.map((f, idx) => (
+                            <li
+                              key={f.name + idx}
+                              className="flex items-center justify-between"
+                            >
+                              <span
+                                className="truncate max-lg:max-w-100 max-sm:max-w-50"
+                                title={f.name}
+                              >
+                                {f.name} ({(f.size / (1024 * 1024)).toFixed(2)}{" "}
+                                MB)
+                              </span>
+                              <Trash2
+                                className="size-4 cursor-pointer text-red-500"
+                                onClick={() => removeSelected(idx)}
+                              />
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
+
+                    <div className="mt-4 flex flex-col items-center gap-2">
+                      <Button
+                        type="button"
+                        size="lg"
+                        onClick={handleUpload}
+                        disabled={uploading || selectedFiles.length === 0}
+                      >
+                        {uploading ? (
+                          <>
+                            <Spinner /> {t.processing}... ({uploadProgress}%)
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="mr-2" /> {t.upload_button}
+                          </>
+                        )}
+                      </Button>
+
+                      <div className="mt-3 w-full">
+                        <div className="mb-2 font-medium">
+                          {t.uploaded_files}
+                        </div>
+                        <ul className="space-y-1 text-xs break-all">
+                          {existingFormFiles.length === 0 && (
+                            <li className="text-muted-foreground">
+                              {t.no_files_uploaded_yet}
+                            </li>
+                          )}
+                          {existingFormFiles.map((u: string) => (
+                            <li
+                              key={u}
+                              className="flex items-center justify-between"
+                            >
+                              <a
+                                href={u}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="truncate"
+                              >
+                                {u}
+                              </a>
+                              <button
+                                type="button"
+                                className="ml-2 text-xs text-red-500"
+                                onClick={() => removeUploadedUrl(u)}
+                              >
+                                {t.remove}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div className="text-muted-foreground mt-2 text-xs">
+                        {t.max_files_size_info
+                          .replace("{{maxFiles}}", MAX_FILES.toString())
+                          .replace("{{maxSize}}", MAX_SIZE_MB.toString())}
+                      </div>
+                    </div>
                   </div>
                 </TabsContent>
 
@@ -669,7 +842,7 @@ const SetupClient = ({
                   <Button type="submit" disabled={isSubmitting}>
                     {isSubmitting ? (
                       <>
-                        <Spinner /> {t.generate_button}
+                        <Spinner /> {hasKb ? t.updating : t.generating}
                       </>
                     ) : hasKb ? (
                       t.update_button

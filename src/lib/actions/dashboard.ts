@@ -46,7 +46,6 @@ type SaveFileParams = {
   fileName: string;
   fileType?: string | null;
   fileSize?: number;
-  lang: SupportedLang;
 };
 
 export async function saveFileToDB({
@@ -80,6 +79,7 @@ export async function saveFileToDB({
 
 interface CreateKbParams {
   title: string;
+  description?: string;
   personality?: string;
   voice: string;
   primaryColor: string;
@@ -92,6 +92,7 @@ interface CreateKbParams {
 export async function createKb(params: CreateKbParams) {
   const {
     title,
+    description,
     personality,
     voice,
     primaryColor,
@@ -109,6 +110,7 @@ export async function createKb(params: CreateKbParams) {
     const kb = await prisma.knowledgeBase.create({
       data: {
         title,
+        description,
         userId,
         metadata: {
           personality,
@@ -132,6 +134,7 @@ export async function createKb(params: CreateKbParams) {
 export async function updateKb(params: CreateKbParams) {
   const {
     title,
+    description,
     personality,
     voice,
     primaryColor,
@@ -155,6 +158,7 @@ export async function updateKb(params: CreateKbParams) {
       where: { id: existingKb.id, userId },
       data: {
         title,
+        description,
         metadata: {
           personality,
           voice,

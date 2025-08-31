@@ -18,7 +18,15 @@ const SetupPage = async ({ params }: SetupPageProps) => {
     include: { documents: true },
   });
 
-  return <SetupClient initialKb={kb} hasKb={!!kb} lang={lang} dict={dict} />;
+  return (
+    <SetupClient
+      initialKb={kb}
+      hasKb={!!kb}
+      lang={lang}
+      dict={dict}
+      currentUserId={userId!}
+    />
+  );
 };
 
 export default SetupPage;

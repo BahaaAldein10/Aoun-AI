@@ -241,6 +241,8 @@
 
     "bot_name": "Agent Name",
     "bot_name_placeholder": "e.g., Aoun Sales Assistant",
+    "bot_description": "Agent Description",
+    "bot_description_placeholder": "e.g., I'm here to help you with your sales queries.",
     "website_url": "Website URL",
     "website_url_placeholder": "https://example.com",
     "bot_personality": "Agent Personality",
@@ -248,7 +250,8 @@
 
     "generate_button": "Generate Knowledge Base",
     "update_button": "Update Knowledge Base",
-
+    "generating": "Generating Knowledge Base",
+    "updating": "Updating Knowledge Base",
     "upload_desc": "Upload PDF or Word documents to provide your agent with information.",
     "upload_button": "Upload Documents",
 
@@ -313,7 +316,42 @@
     "how_to_test_step1": "Click \"Start Recording\" and speak a question",
     "how_to_test_step2": "Click \"Stop Recording\" when finished",
     "how_to_test_step3": "Click \"Process Audio\" to test STT + AI response + TTS",
-    "how_to_test_step4": "The system will transcribe, generate a response, and speak it back"
+    "how_to_test_step4": "The system will transcribe, generate a response, and speak it back",
+
+    "max_files_allowed": "Max {{count}} files allowed. Extra files were ignored.",
+    "file_too_large": "File \"{{fileName}}\" is too large — max {{maxSize}}MB allowed.",
+    "select_files_first": "Please select at least one file to upload.",
+    "max_files_total": "You can upload up to {{maxFiles}} files in total. Remove some uploaded files or select fewer.",
+    "user_id_missing": "User ID missing. Cannot upload files.",
+    "file_exceeds_limit": "\"{{fileName}}\" exceeds {{maxSize}}MB and was skipped.",
+    "upload_failed": "Failed to upload {{fileName}}",
+    "upload_failed_no_url": "Upload failed for {{fileName}} (no URL).",
+    "uploaded_file": "Uploaded {{fileName}}",
+    "uploaded_files_success": "Uploaded {{count}} file(s). Ingestion will start shortly.",
+    "no_files_uploaded": "No files were uploaded successfully.",
+    "upload_failed_error": "Upload failed. See console for details.",
+    "provide_url_or_files": "Provide a URL or upload at least one file",
+    "invalid_url_protocol": "URL must use HTTP or HTTPS protocol",
+    "invalid_url": "Please provide a valid URL",
+    "kb_updated": "Knowledge Base updated.",
+    "kb_created": "Knowledge Base created.",
+    "no_changes_detected": "No changes detected.",
+    "processing_url_and_files": "Started processing URL and {{count}} file(s). This may take a few minutes.",
+    "processing_url": "Started web crawling. This may take a few minutes.",
+    "processing_files": "Started processing {{count}} file(s). This may take a few minutes.",
+    "processing_failed": "Knowledge Base created but failed to start processing. You can try refreshing or contact support.",
+    "network_error": "Network error. Please check your connection and try again.",
+    "validation_error": "Invalid input data. Please check your entries and try again.",
+    "unexpected_error": "An unexpected error occurred. Please try again.",
+    "selected_files": "Selected files:",
+    "uploaded_files": "Uploaded files:",
+    "no_files_uploaded_yet": "No files uploaded yet.",
+    "remove": "Remove",
+    "max_files_size_info": "Max {{maxFiles}} files, up to {{maxSize}}MB each.",
+
+    "bot_name_required": "Bot name is required",
+    "bot_name_max_length": "Bot name must be less than 50 characters",
+    "bot_description_max_length": "Bot description must be less than 100 characters"
   },
   "dashboard_knowledge_base": {
     "title": "Knowledge Base",
