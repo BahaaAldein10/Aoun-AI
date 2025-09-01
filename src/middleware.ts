@@ -12,6 +12,4 @@ export function middleware(req: NextRequest) {
   ) {
     return NextResponse.next();
   }
-
-  // ...rest of your middleware
 }

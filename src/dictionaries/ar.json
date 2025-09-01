@@ -245,6 +245,7 @@
     "bot_description_placeholder": "مثال: هو هنا لمساعدتك في استفسارات البيع.",
     "website_url": "رابط الموقع",
     "website_url_placeholder": "https://example.com",
+    "allowed_origins": "المصادقات المسموحة",
     "bot_personality": "شخصية الوكيل",
     "bot_personality_placeholder": "صف أسلوب ونبرة الوكيل. مثال: 'ودود، محترف، ومتعاون.'",
 
@@ -352,7 +353,8 @@
 
     "bot_name_required": "اسم الوكيل مطلوب",
     "bot_name_max_length": "اسم الوكيل يجب ان يكون اقل من 50 حرف",
-    "bot_description_max_length": "وصف الوكيل يجب ان يكون اقل من 100 حرف"
+    "bot_description_max_length": "وصف الوكيل يجب ان يكون اقل من 100 حرف",
+    "allowed_origins_required": "يجب أن يكون هناك مصدر مسموح به واحد على الأقل"
   },
   "dashboard_knowledge_base": {
     "title": "قاعدة المعرفة",

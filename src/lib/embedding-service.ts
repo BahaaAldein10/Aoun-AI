@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { Embedding } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import OpenAI from "openai";
+import upstashVector, { createVector, Vector } from "./upstash-vector";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -15,7 +16,11 @@ const EMBEDDING_CONFIG = {
   minChunkSize: 100, // Minimum chunk size to avoid very small embeddings
 } as const;
 
-interface ChunkMetadata {
+const PRISMA_BATCH_SIZE = 500; // tune as needed, Mongo and Prisma limitations considered
+const UPSTASH_BATCH_SIZE = 500; // Upstash recommend reasonably sized batches
+const EXPECTED_DIMENSION = 1536; // <-- VERIFY this matches your embedding model dimension
+
+export interface ChunkMetadata {
   documentId: string;
   chunkIndex: number;
   totalChunks: number;
@@ -82,7 +87,7 @@ function chunkText(
 /**
  * Create embeddings for text chunks using OpenAI
  */
-async function createEmbeddings(texts: string[]): Promise<number[][]> {
+export async function createEmbeddings(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return [];
 
   try {
@@ -108,6 +113,30 @@ async function createEmbeddings(texts: string[]): Promise<number[][]> {
 /**
  * Save embeddings to database
  */
+async function batchCreateEmbeddingsToPrisma(
+  embeddingData: {
+    kbId: string;
+    vector: number[];
+    text: string;
+    meta: ChunkMetadata;
+  }[],
+) {
+  for (let i = 0; i < embeddingData.length; i += PRISMA_BATCH_SIZE) {
+    const slice = embeddingData.slice(i, i + PRISMA_BATCH_SIZE);
+
+    const prismaData = slice.map((item) => ({
+      kbId: item.kbId,
+      vector: item.vector,
+      text: item.text,
+      meta: item.meta as unknown as Prisma.JsonValue,
+    }));
+
+    await prisma.embedding.createMany({
+      data: prismaData,
+    });
+  }
+}
+
 async function saveEmbeddings(
   kbId: string,
   chunks: string[],
@@ -116,7 +145,7 @@ async function saveEmbeddings(
     ChunkMetadata,
     "chunkIndex" | "totalChunks" | "startOffset" | "endOffset"
   >,
-): Promise<void> {
+) {
   if (chunks.length !== embeddings.length) {
     throw new Error("Chunks and embeddings length mismatch");
   }
@@ -124,8 +153,6 @@ async function saveEmbeddings(
   const embeddingData = chunks.map((chunk, index) => {
     let startOffset = 0;
     let endOffset = chunk.length;
-
-    // Calculate approximate offsets
     if (index > 0) {
       startOffset = chunks
         .slice(0, index)
@@ -143,26 +170,65 @@ async function saveEmbeddings(
 
     return {
       kbId,
-      vector: embeddings[index], // Store as JSON array
+      vector: embeddings[index],
       text: chunk,
       meta: chunkMetadata,
     };
   });
 
-  // Batch insert embeddings
+  // Prisma insertion in batches
   try {
-    await prisma.embedding.createMany({
-      data: embeddingData as (Embedding & { meta: ChunkMetadata })[],
-    });
-
+    await batchCreateEmbeddingsToPrisma(embeddingData);
     console.log(
-      `Successfully saved ${embeddingData.length} embeddings for document ${metadata.documentId}`,
+      `Saved ${embeddingData.length} embeddings to Prisma for doc ${metadata.documentId}`,
     );
-  } catch (error) {
-    console.error("Failed to save embeddings to database:", error);
-    throw new Error(
-      `Database save failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
+  } catch (err) {
+    console.error("Failed to save embeddings to database:", err);
+    throw err;
+  }
+
+  // Upstash upsert using the new client
+  try {
+    const upstashVectors: Vector[] = embeddingData
+      .map((e, index) => {
+        // Validate vector dimension before creating
+        if (
+          !Array.isArray(e.vector) ||
+          (EXPECTED_DIMENSION && e.vector.length !== EXPECTED_DIMENSION)
+        ) {
+          console.warn(
+            `Vector dimension mismatch for ${metadata.documentId}::${index}: expected ${EXPECTED_DIMENSION}, got ${Array.isArray(e.vector) ? e.vector.length : typeof e.vector}`,
+          );
+          return null; // Will be filtered out
+        }
+
+        return createVector(`${metadata.documentId}::${index}`, e.vector, {
+          documentId: metadata.documentId,
+          chunkIndex: index,
+          filename: metadata.filename,
+          sourceUrl: metadata.sourceUrl,
+          kbId,
+          text: chunks[index], // Include text in metadata for easy retrieval
+        });
+      })
+      .filter((vector): vector is Vector => vector !== null); // Filter out null vectors
+
+    // Batch upsert to Upstash Vector
+    if (upstashVectors.length > 0) {
+      for (let i = 0; i < upstashVectors.length; i += UPSTASH_BATCH_SIZE) {
+        const batch = upstashVectors.slice(i, i + UPSTASH_BATCH_SIZE);
+        await upstashVector.upsert(batch);
+      }
+
+      console.log(
+        `Upserted ${upstashVectors.length} vectors to Upstash Vector for doc ${metadata.documentId}`,
+      );
+    } else {
+      console.warn("No valid vectors to upsert to Upstash Vector");
+    }
+  } catch (err) {
+    console.error("Failed to upsert vectors to Upstash Vector:", err);
+    // don't throw — DB is the source of truth; consider scheduling reindex
   }
 }
 

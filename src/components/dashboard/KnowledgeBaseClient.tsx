@@ -39,6 +39,7 @@ export type KbMetadata = {
   faq?: { question: string; answer: string }[] | null;
   url?: string | null;
   files?: string[] | null;
+  allowedOrigins?: string[];
 } | null;
 
 type KnowledgeBaseClientProps = {

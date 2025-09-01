@@ -38,6 +38,9 @@ export const setupSchema = (dict: Dictionary) => {
       )
       .optional(),
     files: z.array(z.url()).optional(),
+    allowedOrigins: z
+      .array(z.string())
+      .min(1, t.allowed_origins_required),
   });
 };
 

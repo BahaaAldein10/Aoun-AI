@@ -43,21 +43,12 @@ import React, { useRef, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 import Spinner from "../shared/Spinner";
+import { KbMetadata } from "./KnowledgeBaseClient";
 import VoiceIntegrationTab, { availableVoices } from "./VoiceIntegrationTab";
 
 type initialKb = KnowledgeBase & {
   documents: Document[];
 };
-
-type KbMetadata = {
-  personality?: string | null;
-  voice?: string | null;
-  primaryColor?: string | null;
-  accentColor?: string | null;
-  faq?: { question: string; answer: string }[] | null;
-  url?: string | null;
-  files?: string[] | null;
-} | null;
 
 const MAX_FILES = 5;
 const MAX_SIZE_MB = 10;
@@ -104,6 +95,7 @@ const SetupClient = ({
         },
       ],
       files: metadata?.files || [],
+      allowedOrigins: metadata?.allowedOrigins || [],
     },
   });
 
@@ -293,7 +285,9 @@ const SetupClient = ({
       faq: values.faq || [],
       url: values.url || null,
       files: values.files || [],
+      allowedOrigins: values.allowedOrigins || [],
     };
+
 
     try {
       let res;
@@ -554,6 +548,32 @@ const SetupClient = ({
                               {...field}
                               value={field.value ?? ""}
                               placeholder={t.website_url_placeholder}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={control}
+                      name="allowedOrigins"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t.allowed_origins}</FormLabel>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              placeholder="https://clientsite.com, https://another.com"
+                              value={field.value?.join(", ") ?? ""}
+                              onChange={(e) =>
+                                field.onChange(
+                                  e.target.value
+                                    .split(",")
+                                    .map((s) => s.trim())
+                                    .filter(Boolean),
+                                )
+                              }
                             />
                           </FormControl>
                           <FormMessage />

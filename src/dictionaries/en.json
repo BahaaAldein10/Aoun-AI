@@ -245,6 +245,7 @@
     "bot_description_placeholder": "e.g., I'm here to help you with your sales queries.",
     "website_url": "Website URL",
     "website_url_placeholder": "https://example.com",
+    "allowed_origins": "Allowed Origins",
     "bot_personality": "Agent Personality",
     "bot_personality_placeholder": "Describe your agent's tone and style. e.g., 'Friendly, professional, and helpful.'",
 
@@ -351,7 +352,8 @@
 
     "bot_name_required": "Bot name is required",
     "bot_name_max_length": "Bot name must be less than 50 characters",
-    "bot_description_max_length": "Bot description must be less than 100 characters"
+    "bot_description_max_length": "Bot description must be less than 100 characters",
+    "allowed_origins_required": "At least one allowed origin is required"
   },
   "dashboard_knowledge_base": {
     "title": "Knowledge Base",
