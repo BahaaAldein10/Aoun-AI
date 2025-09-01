@@ -15,7 +15,8 @@ function corsHeaders(origin?: string) {
   return {
     "Access-Control-Allow-Origin": origin ?? "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Requested-With",
     "Access-Control-Allow-Credentials": "true",
   };
 }
@@ -74,13 +75,23 @@ export async function POST(req: Request) {
 
     // Sign JWT using JOSE
     const secretKey = new TextEncoder().encode(WIDGET_JWT_SECRET);
+    // compute unix expiry time (seconds since epoch)
+    const expUnix = Math.floor(Date.now() / 1000) + TOKEN_EXP_SECONDS;
+
     const token = await new SignJWT({ kbId, origin: requestOrigin })
       .setProtectedHeader({ alg: "HS256" })
-      .setExpirationTime(TOKEN_EXP_SECONDS)
+      .setExpirationTime(expUnix) // absolute timestamp in seconds
       .sign(secretKey);
 
+    const safeMetadata = {
+      primaryColor: metadata?.primaryColor,
+      accentColor: metadata?.accentColor,
+      voice: metadata?.voice,
+      language: metadata?.language,
+    };
+
     return NextResponse.json(
-      { token, expires_in: TOKEN_EXP_SECONDS },
+      { token, expires_in: TOKEN_EXP_SECONDS, metadata: safeMetadata },
       { headers: corsHeaders(origin) },
     );
   } catch (err) {

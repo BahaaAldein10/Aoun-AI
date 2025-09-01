@@ -2,16 +2,18 @@
 
 import { useDictionary } from "@/contexts/dictionary-context";
 import { cn } from "@/lib/utils";
-import { Mic, Minimize2, X } from "lucide-react";
+import { MessageSquare, Minimize2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import VoiceChatWidget from "./VoiceChatWidget";
 
 interface VoiceChatFloatingWidgetProps {
   lang?: string;
+  kbId?: string;
 }
 
 export default function VoiceChatFloatingWidget({
   lang = "en",
+  kbId,
 }: VoiceChatFloatingWidgetProps) {
   const dict = useDictionary();
   const t = dict.widget;
@@ -61,7 +63,7 @@ export default function VoiceChatFloatingWidget({
         {/* Tooltip */}
         {showTooltip && !isOpen && (
           <div className="animate-in fade-in-0 slide-in-from-bottom-2 absolute right-0 bottom-20 mb-2 rounded-lg bg-gray-900 px-3 py-2 text-sm whitespace-nowrap text-white shadow-lg duration-200">
-            {t.start_voice_chat}
+            {t.start_voice_chat || "Start chat"}
             <div className="absolute top-full right-4 h-0 w-0 border-t-4 border-r-4 border-l-4 border-transparent border-t-gray-900" />
           </div>
         )}
@@ -83,7 +85,7 @@ export default function VoiceChatFloatingWidget({
             isHovered && "scale-110 shadow-2xl",
             isOpen && "scale-95",
           )}
-          aria-label={t.voice_chat_aria}
+          aria-label={t.voice_chat_aria || "Open chat"}
         >
           {/* Animated Background Rings */}
           <div className="absolute inset-0 animate-ping rounded-full bg-gradient-to-br from-blue-500/20 via-purple-500/20 to-pink-500/20" />
@@ -91,7 +93,7 @@ export default function VoiceChatFloatingWidget({
 
           {/* Icon with Rotation Animation */}
           <div className="relative z-10 transition-transform duration-300">
-            <Mic className="h-6 w-6 text-white drop-shadow-sm" />
+            <MessageSquare className="h-6 w-6 text-white drop-shadow-sm" />
           </div>
 
           {/* Pulse Ring on Hover */}
@@ -137,14 +139,14 @@ export default function VoiceChatFloatingWidget({
               <div className="flex items-center justify-between border-b border-gray-200 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 p-4 dark:border-gray-700 dark:from-blue-950/20 dark:via-purple-950/20 dark:to-pink-950/20">
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
-                    <Mic className="h-4 w-4 text-white" />
+                    <MessageSquare className="h-4 w-4 text-white" />
                   </div>
                   <div>
                     <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      {t.voice_assistant}
+                      {t.voice_assistant || "AI Assistant"}
                     </h3>
                     <p className="text-xs text-gray-600 dark:text-gray-400">
-                      {t.powered_by_openai}
+                      {t.powered_by_openai || "AI-powered chat & voice"}
                     </p>
                   </div>
                 </div>
@@ -158,7 +160,7 @@ export default function VoiceChatFloatingWidget({
                       "hover:bg-gray-100 dark:hover:bg-gray-800",
                       "transition-colors duration-200",
                     )}
-                    aria-label={t.minimize_aria}
+                    aria-label={t.minimize_aria || "Minimize"}
                   >
                     <Minimize2 className="h-4 w-4" />
                   </button>
@@ -170,7 +172,7 @@ export default function VoiceChatFloatingWidget({
                       "hover:bg-red-50 dark:hover:bg-red-900/20",
                       "transition-colors duration-200",
                     )}
-                    aria-label={t.close_aria}
+                    aria-label={t.close_aria || "Close"}
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -179,7 +181,11 @@ export default function VoiceChatFloatingWidget({
 
               {/* Widget Content */}
               <div className="h-[calc(100%-4rem)]">
-                <VoiceChatWidget lang={lang} onClose={() => setIsOpen(false)} />
+                <VoiceChatWidget
+                  lang={lang}
+                  onClose={() => setIsOpen(false)}
+                  kbId={kbId}
+                />
               </div>
             </div>
           </div>

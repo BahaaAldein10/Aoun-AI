@@ -45,6 +45,7 @@ import toast from "react-hot-toast";
 import Spinner from "../shared/Spinner";
 import { KbMetadata } from "./KnowledgeBaseClient";
 import VoiceIntegrationTab, { availableVoices } from "./VoiceIntegrationTab";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 
 type initialKb = KnowledgeBase & {
   documents: Document[];
@@ -81,6 +82,7 @@ const SetupClient = ({
     defaultValues: {
       botName: initialKb?.title || "",
       botDescription: initialKb?.description || "",
+      agentLanguage: metadata?.language as SupportedLang,
       url: metadata?.url || "",
       personality: metadata?.personality || "",
       voice:
@@ -286,6 +288,7 @@ const SetupClient = ({
       url: values.url || null,
       files: values.files || [],
       allowedOrigins: values.allowedOrigins || [],
+      language: values.agentLanguage as SupportedLang,
     };
 
 
@@ -594,6 +597,37 @@ const SetupClient = ({
                               placeholder={t.bot_personality_placeholder}
                               rows={4}
                             />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="agentLanguage"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t.agent_language}</FormLabel>
+                          <FormControl>
+                            <Select
+                              value={field.value}
+                              onValueChange={field.onChange}
+                            >
+                              <SelectTrigger>
+                                <SelectValue
+                                  placeholder={t.agent_language_placeholder}
+                                />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="en">
+                                  {t.agent_language_english}
+                                </SelectItem>
+                                <SelectItem value="ar">
+                                  {t.agent_language_arabic}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
                           </FormControl>
                           <FormMessage />
                         </FormItem>

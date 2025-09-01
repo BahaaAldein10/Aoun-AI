@@ -164,3 +164,13 @@
     @apply mx-auto max-w-7xl px-16 py-6 max-xl:px-10 max-lg:px-6 max-sm:px-4;
   }
 }
+
+html, body, #__next {
+  height: 100%;
+  margin: 0;
+}
+
+#__next {
+  display: flex;
+  flex-direction: column;
+}

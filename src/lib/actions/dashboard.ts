@@ -87,6 +87,8 @@ interface CreateKbParams {
   faq?: { question: string; answer: string }[];
   url: string | null;
   files?: string[];
+  allowedOrigins: string[];
+  language: SupportedLang;
 }
 
 export async function createKb(params: CreateKbParams) {
@@ -100,6 +102,8 @@ export async function createKb(params: CreateKbParams) {
     faq,
     url,
     files,
+    allowedOrigins,
+    language,
   } = params;
 
   const session = await auth();
@@ -120,6 +124,8 @@ export async function createKb(params: CreateKbParams) {
           faq,
           url,
           files,
+          allowedOrigins,
+          language,
         },
       },
     });
@@ -142,6 +148,8 @@ export async function updateKb(params: CreateKbParams) {
     faq,
     url,
     files,
+    allowedOrigins,
+    language,
   } = params;
 
   try {
@@ -160,6 +168,7 @@ export async function updateKb(params: CreateKbParams) {
         title,
         description,
         metadata: {
+          ...(existingKb.metadata as object),
           personality,
           voice,
           primaryColor,
@@ -167,6 +176,8 @@ export async function updateKb(params: CreateKbParams) {
           faq,
           url,
           files,
+          allowedOrigins,
+          language,
         },
       },
     });

@@ -24,7 +24,14 @@ export const setupSchema = (dict: Dictionary) => {
       .string()
       .max(100, t.bot_description_max_length)
       .optional(),
-    url: z.url().optional().or(z.literal("")),
+    agentLanguage: z.string({ error: t.agent_language_required }),
+    url: z
+      .url({ message: t.invalid_url })
+      .refine(
+        (val) =>
+          !val || val.startsWith("http://") || val.startsWith("https://"),
+        { message: t.invalid_url_protocol },
+      ),
     personality: z.string().optional(),
     voice: z.string().min(1, "Please select a voice"),
     primaryColor: z.string().regex(/^#([0-9A-F]{3}){1,2}$/i, "Invalid color"),
@@ -38,9 +45,7 @@ export const setupSchema = (dict: Dictionary) => {
       )
       .optional(),
     files: z.array(z.url()).optional(),
-    allowedOrigins: z
-      .array(z.string())
-      .min(1, t.allowed_origins_required),
+    allowedOrigins: z.array(z.string()).min(1, t.allowed_origins_required),
   });
 };
 

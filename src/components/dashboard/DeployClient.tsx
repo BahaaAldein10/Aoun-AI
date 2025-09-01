@@ -61,9 +61,10 @@ const CodeSnippet = ({ code, label }: CodeSnippetProps) => {
 type DeployClientProps = {
   lang: SupportedLang;
   dict: Dictionary;
+  kbId?: string | null;
 };
 
-const DeployClient = ({ lang, dict }: DeployClientProps) => {
+const DeployClient = ({ lang, dict, kbId }: DeployClientProps) => {
   const t = dict.dashboard_deploy;
   const dir = lang === "ar" ? "rtl" : "ltr";
 
@@ -72,17 +73,48 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
   const [voiceApiEndpoint, setVoiceApiEndpoint] = useState<string>("");
   const [messagingWebhookUrl, setMessagingWebhookUrl] = useState<string>("");
 
+  // deploy config
+  const [allowedOriginsRaw, setAllowedOriginsRaw] = useState<string>(""); // comma separated
+  const [isPublic, setIsPublic] = useState<boolean>(false);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [verifyTokenPlain, setVerifyTokenPlain] = useState<string | null>(null);
+  const [verifyGenLoading, setVerifyGenLoading] = useState(false);
+
+  // generated API key (plaintext shown only after generation)
+  const [generatedApiKey, setGeneratedApiKey] = useState<string | null>(null);
+  const [genLoading, setGenLoading] = useState(false);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const origin = window.location.origin;
 
     setEmbedCode(
-      `<div id="aoun-chat-widget"></div>\n<script src="${origin}/widget.js" data-kb-id="YOUR_KB_ID" defer></script>`,
+      `<div id="aoun-chat-widget"></div>\n<script src="${origin}/widget.js" data-kb-id="${kbId ?? "YOUR_KB_ID"}" defer></script>`,
     );
 
     setVoiceApiEndpoint(`${origin}/api/call`);
     setMessagingWebhookUrl(`${origin}/api/messaging/webhook`);
-  }, []);
+  }, [kbId]);
+
+  // load deploy config for this KB (allowedOrigins, isPublic)
+  useEffect(() => {
+    if (!kbId) return;
+    setLoadingConfig(true);
+    fetch(`/api/kb/${kbId}/deploy-config`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.allowedOrigins && Array.isArray(json.allowedOrigins)) {
+          setAllowedOriginsRaw(json.allowedOrigins.join(", "));
+        } else {
+          setAllowedOriginsRaw("");
+        }
+        setIsPublic(false);
+      })
+      .catch((err) => {
+        console.warn("Failed to load deploy config:", err);
+      })
+      .finally(() => setLoadingConfig(false));
+  }, [kbId]);
 
   const apiRequestJson = useMemo(
     () =>
@@ -123,6 +155,78 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
     }
   };
 
+  async function generateVerifyToken() {
+    if (!kbId) {
+      toast.error(t.kb_not_ready ?? "KB not ready");
+      return;
+    }
+    setVerifyGenLoading(true);
+    try {
+      const res = await fetch(`/api/kb/${kbId}/generate-verify-token`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (res.ok && json?.verifyToken) {
+        setVerifyTokenPlain(json.verifyToken);
+        toast.success(
+          t.verify_token_generated ??
+            "Verify token generated — copy it into Meta dev portal now",
+        );
+      } else {
+        toast.error(
+          json?.error ??
+            t.failed_generate_verify ??
+            "Failed to generate verify token",
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(t.network_error ?? "Network error");
+    } finally {
+      setVerifyGenLoading(false);
+    }
+  }
+
+  // generate/regenerate API key
+  async function generateApiKey() {
+    if (!kbId) {
+      toast.error(t.kb_not_available ?? "KB not available");
+      return;
+    }
+    setGenLoading(true);
+    setGeneratedApiKey(null);
+    try {
+      const resp = await fetch(`/api/kb/${kbId}/generate-api-key`, {
+        method: "POST",
+      });
+      const json = await resp.json();
+      if (resp.ok && json?.apiKey) {
+        setGeneratedApiKey(json.apiKey);
+        toast.success(t.api_key_generated ?? "API key generated — copy it now");
+      } else {
+        toast.error(
+          json?.error ?? t.failed_generate_key ?? "Failed to generate key",
+        );
+      }
+    } catch (err) {
+      console.error("generateApiKey error:", err);
+      toast.error(t.failed_generate_key ?? "Failed to generate key");
+    } finally {
+      setGenLoading(false);
+    }
+  }
+
+  // open preview (owner-only preview)
+  function openPreview() {
+    if (!kbId) {
+      toast.error(t.kb_not_available ?? "KB not available");
+      return;
+    }
+    // open a small popup window for preview
+    const url = `/widget/frame?kbid=${encodeURIComponent(kbId)}&preview=true`;
+    window.open(url, "aoun_widget_preview", "width=420,height=640");
+  }
+
   return (
     <div className="grid grid-cols-1 gap-8" dir={dir}>
       <Card>
@@ -132,6 +236,24 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
         </CardHeader>
 
         <CardContent>
+          {/* top row: KB id, preview */}
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <div className="text-muted-foreground text-sm">
+                {t.kb_id_label}
+              </div>
+              <div className="mt-1 font-mono text-sm">
+                {kbId ?? t.kb_not_created}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button onClick={openPreview} disabled={!kbId}>
+                {t.preview_widget}
+              </Button>
+            </div>
+          </div>
+
           <Tabs defaultValue="messaging" dir={dir}>
             {/* Desktop: 5 columns (hidden on <= lg) */}
             <TabsList className="grid w-full grid-cols-5 max-lg:hidden">
@@ -225,12 +347,54 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                         variant="ghost"
                         size="icon"
                         onClick={() =>
-                          copyToClipboard(messagingWebhookUrl, "Webhook URL")
+                          copyToClipboard(messagingWebhookUrl, t.webhook_url)
                         }
-                        aria-label="Copy webhook url"
+                        aria-label={t.copy_webhook_url}
                       >
                         <Clipboard className="h-4 w-4" />
                       </Button>
+                    </div>
+
+                    <div className="mt-4">
+                      <h4 className="font-semibold">
+                        {t.webhook_verify_token_title}
+                      </h4>
+                      <p className="text-muted-foreground text-sm">
+                        {t.webhook_verify_token_desc}
+                      </p>
+
+                      <div className="mt-2 flex items-center gap-2">
+                        <Button
+                          onClick={generateVerifyToken}
+                          disabled={verifyGenLoading}
+                        >
+                          {verifyGenLoading
+                            ? t.generating
+                            : t.generate_verify_token}
+                        </Button>
+
+                        {verifyTokenPlain && (
+                          <div className="bg-muted flex items-center gap-2 rounded p-2 font-mono text-sm">
+                            <span className="select-all">
+                              {verifyTokenPlain}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                navigator.clipboard.writeText(verifyTokenPlain);
+                                toast.success(t.copied);
+                              }}
+                            >
+                              <Clipboard className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+
+                      <p className="text-muted-foreground mt-2 text-xs">
+                        {t.token_note}
+                      </p>
                     </div>
                   </AlertDescription>
                 </Alert>
@@ -245,9 +409,9 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                       variant="ghost"
                       size="icon"
                       onClick={() =>
-                        copyToClipboard(voiceApiEndpoint, "Voice API endpoint")
+                        copyToClipboard(voiceApiEndpoint, t.voice_api_endpoint)
                       }
-                      aria-label="Copy voice api"
+                      aria-label={t.copy_voice_api}
                     >
                       <Clipboard className="h-4 w-4" />
                     </Button>
@@ -265,8 +429,40 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
 
                 <CodeSnippet
                   code={embedCode || t.loading_placeholder}
-                  label="Embed code"
+                  label={t.embed_code}
                 />
+
+                <Alert>
+                  <AlertTitle>{t.api_key_title}</AlertTitle>
+                  <AlertDescription>
+                    {t.api_key_desc}
+
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button onClick={generateApiKey} disabled={genLoading}>
+                        {genLoading ? t.generating : t.generate_api_key}
+                      </Button>
+
+                      {generatedApiKey && (
+                        <div className="bg-muted flex items-center gap-2 rounded p-2 font-mono text-sm">
+                          <span className="select-all">{generatedApiKey}</span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() =>
+                              copyToClipboard(generatedApiKey, t.api_key)
+                            }
+                          >
+                            <Clipboard className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="text-muted-foreground mt-2 text-xs">
+                      {t.api_key_warning}
+                    </p>
+                  </AlertDescription>
+                </Alert>
 
                 <div>
                   <h4 className="font-semibold">{t.instructions_title}</h4>
@@ -292,7 +488,7 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                       variant="ghost"
                       size="icon"
                       onClick={() =>
-                        copyToClipboard(voiceApiEndpoint, "API endpoint")
+                        copyToClipboard(voiceApiEndpoint, t.api_endpoint)
                       }
                     >
                       <Clipboard className="h-4 w-4" />
@@ -303,12 +499,15 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                 <div className="grid gap-6 md:grid-cols-2">
                   <div>
                     <h4 className="font-semibold">{t.api_request_title}</h4>
-                    <CodeSnippet code={apiRequestJson} label="Request JSON" />
+                    <CodeSnippet code={apiRequestJson} label={t.request_json} />
                   </div>
 
                   <div>
                     <h4 className="font-semibold">{t.api_response_title}</h4>
-                    <CodeSnippet code={apiResponseJson} label="Response JSON" />
+                    <CodeSnippet
+                      code={apiResponseJson}
+                      label={t.response_json}
+                    />
                   </div>
                 </div>
               </div>
@@ -326,7 +525,7 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                       variant="ghost"
                       size="icon"
                       onClick={() =>
-                        copyToClipboard(voiceApiEndpoint, "API endpoint")
+                        copyToClipboard(voiceApiEndpoint, t.api_endpoint)
                       }
                     >
                       <Clipboard className="h-4 w-4" />
@@ -337,7 +536,7 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                 <h4 className="font-semibold">{t.swift_example_title}</h4>
                 <CodeSnippet
                   code={t.swift_example_code || t.example_placeholder || ""}
-                  label="Swift example"
+                  label={t.swift_example}
                 />
               </div>
             </TabsContent>
@@ -354,7 +553,7 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                       variant="ghost"
                       size="icon"
                       onClick={() =>
-                        copyToClipboard(voiceApiEndpoint, "API endpoint")
+                        copyToClipboard(voiceApiEndpoint, t.api_endpoint)
                       }
                     >
                       <Clipboard className="h-4 w-4" />
@@ -365,7 +564,7 @@ const DeployClient = ({ lang, dict }: DeployClientProps) => {
                 <h4 className="font-semibold">{t.kotlin_example_title}</h4>
                 <CodeSnippet
                   code={t.kotlin_example_code || t.example_placeholder || ""}
-                  label="Kotlin example"
+                  label={t.kotlin_example}
                 />
               </div>
             </TabsContent>

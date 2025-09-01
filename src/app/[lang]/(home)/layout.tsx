@@ -1,7 +1,9 @@
 import Footer from "@/components/layout/Footer";
 import Header from "@/components/layout/Header";
 import VoiceChatFloatingWidget from "@/components/shared/VoiceChatFloatingWidget";
+import { auth } from "@/lib/auth";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
+import { prisma } from "@/lib/prisma";
 import { Metadata } from "next";
 import { ReactNode } from "react";
 
@@ -27,12 +29,24 @@ export default async function HomeLayout({
 }) {
   const { lang } = await params;
 
+  const session = await auth();
+  const userId = session?.user?.id;
+
+  const kb = await prisma.knowledgeBase.findFirst({
+    where: {
+      userId,
+    },
+    select: {
+      id: true,
+    },
+  });
+
   return (
     <>
       <Header params={params} />
       {children}
       <Footer params={params} />
-      <VoiceChatFloatingWidget lang={lang} />
+      <VoiceChatFloatingWidget lang={lang} kbId={kb?.id} />
     </>
   );
 }

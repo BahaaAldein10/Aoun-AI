@@ -1,3 +1,4 @@
+// src/app/api/chat/route.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const runtime = "nodejs";
 
@@ -5,6 +6,7 @@ import type { ChunkMetadata } from "@/lib/embedding-service";
 import { prisma } from "@/lib/prisma";
 import { upstashSearchSimilar } from "@/search/upstash-search";
 import { Redis } from "@upstash/redis";
+import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
@@ -104,7 +106,6 @@ export async function POST(req: Request) {
       message,
       conversationId,
       history = [],
-      userId: incomingUserId,
       topK: requestedTopK,
     } = body || {};
 
@@ -130,6 +131,7 @@ export async function POST(req: Request) {
           origin: payload.origin as string | undefined,
         };
 
+        // require token's kbId to match requested kbId (keeps tight scoping)
         if (widgetPayload.kbId !== kbId) {
           return NextResponse.json(
             { error: "KB ID mismatch in widget token" },
@@ -168,11 +170,68 @@ export async function POST(req: Request) {
 
     const metadata: Record<string, any> =
       (kb.metadata as Record<string, any>) ?? {};
-    const kbApiKey = metadata?.apiKey as string | undefined;
+
+    // If the request used a widget token, ensure the token's parent origin
+    // (the page that requested the token) is allowed for this KB.
+    if (widgetPayload) {
+      const allowedOrigins = Array.isArray(metadata.allowedOrigins)
+        ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
+        : [];
+
+      if (widgetPayload.origin && allowedOrigins.length > 0) {
+        if (!allowedOrigins.includes(widgetPayload.origin)) {
+          return NextResponse.json(
+            { error: "Origin not allowed for widget token" },
+            { status: 403 },
+          );
+        }
+      } else {
+        // token has no origin — treat as invalid for widget usage
+        return NextResponse.json(
+          { error: "Invalid widget token (missing origin)" },
+          { status: 403 },
+        );
+      }
+    }
 
     // --- API key protection for private KBs ---
-    if (kbApiKey && !widgetPayload) {
-      if (!apiKeyHeader || apiKeyHeader !== kbApiKey) {
+    if (!widgetPayload) {
+      const storedHashHex =
+        typeof metadata.apiKeyHash === "string"
+          ? metadata.apiKeyHash
+          : undefined;
+
+      // Always-private: require an API key hash to be configured.
+      if (!storedHashHex) {
+        return NextResponse.json(
+          { error: "Knowledge base is private; API key required" },
+          { status: 401 },
+        );
+      }
+
+      // Ensure there is an incoming header
+      if (!apiKeyHeader) {
+        return NextResponse.json(
+          { error: "Unauthorized for this KB" },
+          { status: 401 },
+        );
+      }
+
+      // Normalize incoming token (trim) then hash and compare with stored hex using timingSafeEqual
+      const incomingToken = apiKeyHeader.trim();
+
+      const incomingHashBuf = crypto
+        .createHash("sha256")
+        .update(incomingToken, "utf8")
+        .digest(); // Buffer
+
+      const storedHashBuf = Buffer.from(storedHashHex, "hex");
+
+      // timingSafeEqual requires buffers to have same length
+      if (
+        storedHashBuf.length !== incomingHashBuf.length ||
+        !crypto.timingSafeEqual(storedHashBuf, incomingHashBuf)
+      ) {
         return NextResponse.json(
           { error: "Unauthorized for this KB" },
           { status: 401 },
@@ -269,7 +328,7 @@ export async function POST(req: Request) {
     try {
       await prisma.usage.create({
         data: {
-          userId: incomingUserId ?? kb.userId,
+          userId: kb.userId,
           botId: null,
           date: new Date(),
           interactions: 1,

@@ -40,6 +40,7 @@ export type KbMetadata = {
   url?: string | null;
   files?: string[] | null;
   allowedOrigins?: string[];
+  language: SupportedLang;
 } | null;
 
 type KnowledgeBaseClientProps = {

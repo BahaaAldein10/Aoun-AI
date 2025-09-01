@@ -5,16 +5,20 @@ import { useDictionary } from "@/contexts/dictionary-context";
 import { cn } from "@/lib/utils";
 import {
   Loader,
+  MessageSquare,
   Mic,
   MicOff,
   Pause,
   Play,
+  Send,
   Trash2,
   Volume2,
   VolumeX,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
+import { Input } from "../ui/input";
+import Spinner from "./Spinner";
 
 type Msg = {
   id: string;
@@ -23,33 +27,47 @@ type Msg = {
   audioUrl?: string | null;
   createdAt: string;
   isPlaying?: boolean;
+  isVoice?: boolean; // indicates if message was sent via voice
 };
 
 interface VoiceChatWidgetProps {
   lang?: string;
   onClose?: () => void;
+  kbId?: string; // knowledge base ID for chat
 }
 
 export default function VoiceChatWidget({
   lang = "en",
   onClose,
+  kbId,
 }: VoiceChatWidgetProps) {
   const dict = useDictionary();
   const t = dict.widget;
 
-  const [recording, setRecording] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [permission, setPermission] = useState<boolean | null>(null);
+  // Chat state
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [textInput, setTextInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+
+  // Voice state
+  const [recording, setRecording] = useState(false);
+  const [voicePending, setVoicePending] = useState(false);
+  const [permission, setPermission] = useState<boolean | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
+  const [recordingTime, setRecordingTime] = useState(0);
 
+  // Mode state
+  const [mode, setMode] = useState<"text" | "voice">("text");
+
+  // Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const [recordingTime, setRecordingTime] = useState(0);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
 
   // Check microphone permission on mount
   useEffect(() => {
@@ -109,6 +127,108 @@ export default function VoiceChatWidget({
     );
   }, []);
 
+  // Text chat functions
+  const sendTextMessage = async () => {
+    const message = textInput.trim();
+    if (!message || !kbId) return;
+
+    setTextInput("");
+    setIsTyping(true);
+
+    // Add user message
+    const userMsg: Msg = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text: message,
+      createdAt: new Date().toISOString(),
+      isVoice: false,
+    };
+    pushMessage(userMsg);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          kbId,
+          message,
+          conversationId,
+          history: messages.slice(-6).map((msg) => ({
+            role: msg.role === "user" ? "user" : "assistant",
+            text: msg.text,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const reply = data.text?.trim() || "I couldn't generate a response.";
+
+      // Update or create conversation ID
+      if (data.conversationId && !conversationId) {
+        setConversationId(data.conversationId);
+      }
+
+      // Add bot response
+      const botMsg: Msg = {
+        id: `b-${Date.now()}`,
+        role: "bot",
+        text: reply,
+        createdAt: new Date().toISOString(),
+        isVoice: false,
+      };
+      pushMessage(botMsg);
+
+      // Optional: Generate TTS for the reply
+      if (audioEnabled) {
+        generateTTS(reply, botMsg.id);
+      }
+    } catch (error) {
+      console.error("Text chat error:", error);
+      const errorMsg: Msg = {
+        id: `err-${Date.now()}`,
+        role: "bot",
+        text: "Sorry, I encountered an error processing your message.",
+        createdAt: new Date().toISOString(),
+        isVoice: false,
+      };
+      pushMessage(errorMsg);
+      toast.error("Failed to send message");
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  // TTS generation for text responses
+  const generateTTS = async (text: string, messageId: string) => {
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          voice: lang?.startsWith("ar") ? "nova" : "alloy",
+          speed: 1.0,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        updateMessage(messageId, { audioUrl: data.audioUrl });
+      }
+    } catch (error) {
+      console.warn("TTS generation failed:", error);
+    }
+  };
+
+  // Voice chat functions (from your existing code)
   const startRecording = async () => {
     if (permission === false) {
       toast.error(t.microphone_permission_denied);
@@ -154,14 +274,13 @@ export default function VoiceChatWidget({
 
         if (chunksRef.current.length > 0) {
           const blob = new Blob(chunksRef.current, { type: mimeType });
-          await sendAudio(blob);
+          await sendVoiceMessage(blob);
         }
       });
 
-      mediaRecorder.start(1000); // Collect data every second
+      mediaRecorder.start(1000);
       setRecording(true);
 
-      // Haptic feedback if available
       if ("vibrate" in navigator) {
         navigator.vibrate(50);
       }
@@ -177,161 +296,106 @@ export default function VoiceChatWidget({
       mediaRecorderRef.current.stop();
       setRecording(false);
 
-      // Haptic feedback if available
       if ("vibrate" in navigator) {
         navigator.vibrate([50, 50, 50]);
       }
     }
   };
 
-  const sendAudio = async (blob: Blob) => {
-    // Validate audio blob
+  const sendVoiceMessage = async (blob: Blob) => {
     if (blob.size === 0) {
       toast.error(t.recording_empty);
       return;
     }
 
     if (blob.size < 1000) {
-      // Less than 1KB
       toast.error(t.recording_too_short);
       return;
     }
 
-    // Add user message placeholder
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
       role: "user",
       text: t.processing_voice_message,
       createdAt: new Date().toISOString(),
+      isVoice: true,
     };
     pushMessage(userMsg);
 
     const formData = new FormData();
     formData.append("audio", blob, "voice.webm");
+    if (kbId) formData.append("kbId", kbId);
+    if (conversationId) formData.append("conversationId", conversationId);
 
-    setPending(true);
+    setVoicePending(true);
 
     try {
       const response = await fetch("/api/voice", {
         method: "POST",
         body: formData,
-        credentials: "include",
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => null);
-        throw new Error(errorText || `HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
       }
 
       const data = await response.json();
-      const transcript = data.transcript?.trim() || "";
+      const transcript = data.text?.trim() || "";
       const reply = data.reply?.trim() || "";
-      const audioUrl = data.audioUrl || null;
+      const audioUrl = data.audio || null;
 
-      if (!transcript && !reply) {
-        throw new Error("No response received");
+      // Update conversation ID
+      if (data.conversationId && !conversationId) {
+        setConversationId(data.conversationId);
       }
 
-      // Update user message with transcript
       updateMessage(userMsg.id, {
         text: transcript || t.voice_message_no_transcript,
       });
 
-      // Add bot response
       const botMsg: Msg = {
         id: `b-${Date.now()}`,
         role: "bot",
         text: reply || t.no_response_generated,
         audioUrl,
         createdAt: new Date().toISOString(),
+        isVoice: true,
       };
       pushMessage(botMsg);
 
-      // Auto-play response if audio is enabled
       if (audioUrl && audioEnabled) {
         setTimeout(() => playAudio(botMsg.id, audioUrl), 500);
-      } else if (reply && audioEnabled) {
-        setTimeout(() => speakText(reply), 500);
       }
     } catch (error) {
       console.error("Voice processing error:", error);
-
-      // Update user message to show error
       updateMessage(userMsg.id, {
         text: t.failed_process_voice_message,
       });
 
-      // Add error message
       const errorMsg: Msg = {
         id: `err-${Date.now()}`,
         role: "bot",
         text: t.voice_processing_error,
         createdAt: new Date().toISOString(),
+        isVoice: true,
       };
       pushMessage(errorMsg);
 
       toast.error(t.voice_processing_failed);
     } finally {
-      setPending(false);
+      setVoicePending(false);
     }
   };
 
-  const speakText = (text: string) => {
-    if (!text || !audioEnabled) return;
-    if (!("speechSynthesis" in window)) {
-      console.warn("Speech synthesis not supported");
-      return;
-    }
-
-    // Cancel any ongoing speech
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    // Configure voice based on language
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find((voice) => {
-      if (lang?.startsWith("ar")) {
-        return voice.lang.startsWith("ar");
-      }
-      return voice.lang.startsWith("en");
-    });
-
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
-
-    utterance.lang = lang?.startsWith("ar") ? "ar-SA" : "en-US";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.volume = 0.8;
-
-    utterance.onstart = () => {
-      setCurrentlyPlaying("tts");
-    };
-
-    utterance.onend = () => {
-      setCurrentlyPlaying(null);
-    };
-
-    utterance.onerror = (event) => {
-      console.error("Speech synthesis error:", event);
-      setCurrentlyPlaying(null);
-    };
-
-    window.speechSynthesis.speak(utterance);
-  };
-
+  // Audio playback functions
   const playAudio = (messageId: string, url: string) => {
     if (!audioEnabled) return;
 
-    // Stop current audio
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
 
-    // Stop speech synthesis
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -381,6 +445,7 @@ export default function VoiceChatWidget({
   const clearMessages = () => {
     stopAudio();
     setMessages([]);
+    setConversationId(null);
     toast.success(t.messages_cleared);
   };
 
@@ -390,7 +455,15 @@ export default function VoiceChatWidget({
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendTextMessage();
+    }
+  };
+
   const isRtl = lang === "ar";
+  const pending = isTyping || voicePending;
 
   return (
     <div className={cn("flex h-full flex-col", isRtl && "rtl")}>
@@ -398,10 +471,16 @@ export default function VoiceChatWidget({
       <div className="flex items-center justify-between border-b bg-gradient-to-r from-blue-50 to-purple-50 p-4 dark:from-blue-950/20 dark:to-purple-950/20">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
-            <Mic className="h-5 w-5 text-white" />
+            {mode === "voice" ? (
+              <Mic className="h-5 w-5 text-white" />
+            ) : (
+              <MessageSquare className="h-5 w-5 text-white" />
+            )}
           </div>
           <div>
-            <h3 className="text-sm font-semibold">{t.voice_assistant}</h3>
+            <h3 className="text-sm font-semibold">
+              {mode === "voice" ? t.voice_assistant : "Chat Assistant"}
+            </h3>
             <p className="text-muted-foreground text-xs">
               {recording
                 ? `${t.recording_status} ${formatTime(recordingTime)}`
@@ -413,6 +492,27 @@ export default function VoiceChatWidget({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Mode Toggle */}
+          <div className="flex rounded-lg bg-gray-200 p-1 dark:bg-gray-700">
+            <Button
+              variant={mode === "text" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setMode("text")}
+              className="h-7 px-3 text-xs"
+            >
+              Text
+            </Button>
+            <Button
+              variant={mode === "voice" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setMode("voice")}
+              className="h-7 px-3 text-xs"
+              disabled={permission === false}
+            >
+              Voice
+            </Button>
+          </div>
+
           <Button
             variant="ghost"
             size="icon"
@@ -446,14 +546,22 @@ export default function VoiceChatWidget({
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/20 dark:to-purple-900/20">
-              <Mic className="h-8 w-8 text-blue-600 dark:text-blue-400" />
+              {mode === "voice" ? (
+                <Mic className="h-8 w-8 text-blue-600 dark:text-blue-400" />
+              ) : (
+                <MessageSquare className="h-8 w-8 text-blue-600 dark:text-blue-400" />
+              )}
             </div>
             <div>
               <p className="text-sm font-medium">
-                {t.start_voice_conversation}
+                {mode === "voice"
+                  ? t.start_voice_conversation
+                  : "Start a conversation"}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
-                {t.start_conversation_description}
+                {mode === "voice"
+                  ? t.start_conversation_description
+                  : "Type a message or switch to voice mode"}
               </p>
             </div>
           </div>
@@ -480,13 +588,22 @@ export default function VoiceChatWidget({
               >
                 <div
                   className={cn(
-                    "rounded-2xl px-4 py-2 text-sm break-words",
+                    "relative rounded-2xl px-4 py-2 text-sm break-words",
                     msg.role === "user"
                       ? "rounded-br-md bg-blue-500 text-white"
                       : "rounded-bl-md bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100",
                   )}
                 >
                   <div className="whitespace-pre-wrap">{msg.text}</div>
+
+                  {/* Voice indicator */}
+                  {msg.isVoice && (
+                    <div className="absolute -top-2 -right-2">
+                      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-500 text-white">
+                        <Mic className="h-3 w-3" />
+                      </div>
+                    </div>
+                  )}
 
                   {msg.audioUrl && (
                     <div className="mt-2 flex items-center gap-2">
@@ -552,54 +669,79 @@ export default function VoiceChatWidget({
         )}
       </div>
 
-      {/* Recording Controls */}
+      {/* Input Controls */}
       <div className="border-t bg-white p-4 dark:bg-gray-950">
-        {permission === false && (
-          <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
-            <div className="flex items-center gap-2">
-              <MicOff className="h-4 w-4 text-red-600" />
-              <p className="text-sm text-red-700 dark:text-red-400">
-                {t.microphone_access_denied}
+        {mode === "text" ? (
+          /* Text Input */
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Input
+                ref={textInputRef}
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type your message..."
+                disabled={pending}
+              />
+            </div>
+            <Button
+              onClick={sendTextMessage}
+              disabled={!textInput.trim() || pending || !kbId}
+            >
+              {pending ? <Spinner /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
+        ) : (
+          /* Voice Controls */
+          <>
+            {permission === false && (
+              <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
+                <div className="flex items-center gap-2">
+                  <MicOff className="h-4 w-4 text-red-600" />
+                  <p className="text-sm text-red-700 dark:text-red-400">
+                    {t.microphone_access_denied}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-center">
+              {!recording ? (
+                <Button
+                  onClick={startRecording}
+                  disabled={voicePending || permission === false || !kbId}
+                  className={cn(
+                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                    "bg-gradient-to-br from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
+                    "shadow-lg hover:scale-105 hover:shadow-xl",
+                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+                  )}
+                  title={t.start_recording}
+                >
+                  <Mic className="h-8 w-8 text-white" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={stopRecording}
+                  className={cn(
+                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                    "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
+                    "animate-pulse shadow-lg hover:shadow-xl",
+                  )}
+                  title={t.stop_recording}
+                >
+                  <div className="h-6 w-6 rounded-sm bg-white" />
+                </Button>
+              )}
+            </div>
+
+            <div className="mt-3 text-center">
+              <p className="text-muted-foreground text-xs">
+                {recording ? t.tap_stop_recording : t.tap_to_record}
               </p>
             </div>
-          </div>
+          </>
         )}
-
-        <div className="flex items-center justify-center">
-          {!recording ? (
-            <Button
-              onClick={startRecording}
-              disabled={pending || permission === false}
-              className={cn(
-                "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                "bg-gradient-to-br from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
-                "shadow-lg hover:scale-105 hover:shadow-xl",
-                "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
-              )}
-              title={t.start_recording}
-            >
-              <Mic className="h-8 w-8 text-white" />
-            </Button>
-          ) : (
-            <Button
-              onClick={stopRecording}
-              className={cn(
-                "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
-                "animate-pulse shadow-lg hover:shadow-xl",
-              )}
-              title={t.stop_recording}
-            >
-              <div className="h-6 w-6 rounded-sm bg-white" />
-            </Button>
-          )}
-        </div>
-
-        <div className="mt-3 text-center">
-          <p className="text-muted-foreground text-xs">
-            {recording ? t.tap_stop_recording : t.tap_to_record}
-          </p>
-        </div>
       </div>
     </div>
   );
