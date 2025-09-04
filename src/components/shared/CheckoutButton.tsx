@@ -4,16 +4,18 @@ import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import Spinner from "./Spinner";
+import { SupportedLang } from "@/lib/dictionaries";
 
 interface CheckoutButtonProps {
   planId: string;
-  lang: string;
+  lang: SupportedLang;
   SubscribeText: string;
   RedirectingText: string;
   popular?: boolean;
   disabled?: boolean;
   variant?: "default" | "outline" | "secondary";
   hasActivePaidSubscription: boolean;
+  hasUserId: boolean;
 }
 
 export default function CheckoutButton({
@@ -25,12 +27,23 @@ export default function CheckoutButton({
   disabled = false,
   variant = "default",
   hasActivePaidSubscription,
+  hasUserId,
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
 
   const handleCheckout = async () => {
     // Do nothing if button is disabled or user is on current plan
     if (disabled || hasActivePaidSubscription) return;
+
+    // Do nothing if user is not logged in
+    if (!hasUserId) {
+      toast.error(
+        lang === "ar"
+          ? "يُرجى تسجيل الدخول أولاً للاشتراك."
+          : "You must be logged in to subscribe.",
+      );
+      return;
+    };
 
     setLoading(true);
 

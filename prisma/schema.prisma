@@ -272,7 +272,7 @@ model Integration {
  */
 model Plan {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  name            PlanName
+  name            PlanName @default(FREE)
   title           String
   description     String?
   lang            String

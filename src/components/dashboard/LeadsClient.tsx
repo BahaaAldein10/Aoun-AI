@@ -2,31 +2,47 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/data-table"; // adjust path if needed
+import { DataTable } from "@/components/ui/data-table";
 import type { Dictionary } from "@/contexts/dictionary-context";
 import type { SupportedLang } from "@/lib/dictionaries";
 import { cn } from "@/lib/utils";
+import { Integration, Lead } from "@prisma/client";
 import { Table } from "@tanstack/react-table";
 import { useState } from "react";
 import toast from "react-hot-toast";
-import { Lead, columns as makeColumns } from "./LeadsColumns";
+import { SpreadsheetSelectionModal } from "../shared/SpreadsheetSelectionModal";
+import { columns as makeColumns } from "./LeadsColumns";
 
 const LeadsClient = ({
   initialLeads = [],
   lang,
   dict,
+  integrations = [], // Add integrations prop
 }: {
   initialLeads?: Lead[];
   lang: SupportedLang;
   dict: Dictionary;
+  integrations?: Integration[]; // Add this
 }) => {
   const [tableInstance, setTableInstance] = useState<Table<Lead> | null>(null);
   const [rows, setRows] = useState<Lead[]>(initialLeads ?? []);
+  const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
 
   const t: Record<string, string> = dict.dashboard_leads;
   const locale = lang === "ar" ? "ar" : "en-US";
   const isRtl = lang === "ar";
 
+  // Check if Google Sheets integration exists and if it needs configuration
+  const googleSheetsIntegration = integrations.find(
+    (integration) =>
+      integration.type === "GOOGLE_SHEETS" && integration.enabled,
+  );
+
+  const needsSpreadsheetConfig =
+    googleSheetsIntegration &&
+    !(googleSheetsIntegration.meta as { spreadsheetId: string })?.spreadsheetId;
+
+  /** Export visible/filtered rows */
   function downloadCsv() {
     const dataToExport = tableInstance
       ? tableInstance.getFilteredRowModel().rows.map((r) => r.original)
@@ -37,6 +53,7 @@ const LeadsClient = ({
       t.th_contact ?? "Contact",
       t.th_status ?? "Status",
       t.th_source ?? "Source",
+      t.th_captured_by ?? "Captured By",
       t.th_captured_at ?? "Captured At",
     ];
 
@@ -49,21 +66,26 @@ const LeadsClient = ({
       const capturedAt = r.createdAt
         ? new Date(r.createdAt).toLocaleString(locale)
         : "";
+      const updatedAt = r.updatedAt
+        ? new Date(r.updatedAt).toLocaleString(locale)
+        : "";
+      const metaString = r.meta ? JSON.stringify(r.meta) : "";
+
       const cols = [
         r.name ?? "",
         contact,
         r.status,
         r.source ?? "",
+        r.capturedBy ?? "",
+        metaString,
         capturedAt,
+        updatedAt,
       ].map((v) => `"${String(v).replace(/"/g, '""')}"`);
       csvRows.push(cols.join(","));
     }
 
-    // Prepend BOM so Excel recognizes UTF-8 (important for Arabic)
     const csvContent = "\uFEFF" + csvRows.join("\n");
-    const blob = new Blob([csvContent], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -75,24 +97,10 @@ const LeadsClient = ({
     toast.success(t.toast_exported ?? t.downloaded_csv ?? "Downloaded");
   }
 
-  // action handlers (UI-only placeholders)
-  function handleView(row: Lead) {
-    toast(
-      t.toast_view_placeholder?.replace("{name}", row.name ?? row.id) ?? "View",
-    );
-  }
-
-  function handleContact(row: Lead) {
-    toast(
-      t.toast_contact_placeholder?.replace("{name}", row.name ?? row.id) ??
-        "Contact",
-    );
-  }
-
-  function handleDelete(id: string) {
-    setRows((prev) => prev.filter((r) => r.id !== id));
-    toast.success(t.toast_deleted ?? "Deleted");
-  }
+  const handleSpreadsheetConfigured = () => {
+    // Refresh the page or update the integration state
+    window.location.reload();
+  };
 
   return (
     <div className="space-y-6">
@@ -104,12 +112,31 @@ const LeadsClient = ({
 
         <div className="flex gap-2">
           <Button onClick={downloadCsv}>{t.download_csv}</Button>
-          <Button
-            variant="outline"
-            onClick={() => toast(t.connect_crm_placeholder ?? "Connect CRM")}
-          >
-            {t.connect_crm}
-          </Button>
+
+          {/* Show Configure Spreadsheet button if Google Sheets needs config */}
+          {needsSpreadsheetConfig ? (
+            <Button
+              variant="outline"
+              onClick={() => setIsSpreadsheetModalOpen(true)}
+              className="border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
+            >
+              {t.configure_spreadsheet ?? "Configure Spreadsheet"}
+            </Button>
+          ) : googleSheetsIntegration ? (
+            <Button
+              variant="outline"
+              onClick={() => toast(t.sync_crm_placeholder ?? "Sync with CRM")}
+            >
+              {t.sync_crm ?? "Sync with Google Sheets"}
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              onClick={() => toast(t.connect_crm_placeholder ?? "Connect CRM")}
+            >
+              {t.connect_crm}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -126,9 +153,6 @@ const LeadsClient = ({
               t,
               lang,
               locale,
-              onView: handleView,
-              onContact: handleContact,
-              onDelete: handleDelete,
             })}
             data={rows}
             lang={lang}
@@ -138,10 +162,20 @@ const LeadsClient = ({
             nextButton={t.next_button}
             onTableReady={setTableInstance}
             initialPageSize={20}
-            getStatus={(r: Lead) => r.status ?? "new"}
+            showStatusFilter
+            getStatus={(r: Lead) => r.status ?? "NEW"}
           />
         </CardContent>
       </Card>
+
+      {/* Spreadsheet Selection Modal */}
+      <SpreadsheetSelectionModal
+        isOpen={isSpreadsheetModalOpen}
+        onClose={() => setIsSpreadsheetModalOpen(false)}
+        onSuccess={handleSpreadsheetConfigured}
+        t={t}
+        lang={lang}
+      />
     </div>
   );
 };

@@ -37,6 +37,7 @@ const OAUTH_CONFIGS = {
         ? [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive.readonly", // Add this to list spreadsheets
           ]
         : []),
     ],

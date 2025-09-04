@@ -212,6 +212,7 @@ const PricingPage = async ({ params }: Props) => {
                         disabled={buttonProps.disabled}
                         variant={buttonProps.variant}
                         hasActivePaidSubscription={!!hasActivePaidSubscription}
+                        hasUserId={!!session?.user.id}
                       />
                     )}
                   </CardFooter>
