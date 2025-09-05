@@ -89,7 +89,7 @@ const DeployClient = ({ lang, dict, kbId }: DeployClientProps) => {
     const origin = window.location.origin;
 
     setEmbedCode(
-      `<div id="aoun-chat-widget"></div>\n<script src="${origin}/widget.js" data-kb-id="${kbId ?? "YOUR_KB_ID"}" defer></script>`,
+      `<div id="aoun-chat-widget"></div>\n<script src="${origin}/widget.js" data-kb-id="${kbId ?? "YOUR_KB_ID"}" data-api-key="YOUR_API_KEY" defer></script>`,
     );
 
     setVoiceApiEndpoint(`${origin}/api/call`);

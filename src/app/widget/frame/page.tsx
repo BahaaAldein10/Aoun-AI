@@ -1,3 +1,4 @@
+// src/app/widget/frame/page.tsx
 "use client";
 
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
@@ -35,6 +36,9 @@ export default function WidgetFrame() {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [kbId, setKbId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<KbMetadata | null>(null);
+  const [tokenStatus, setTokenStatus] = useState<"pending" | "ready" | "error">(
+    "pending",
+  );
 
   // Chat state
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -60,10 +64,11 @@ export default function WidgetFrame() {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
+  const initializationRef = useRef<boolean>(false);
 
   // Extract metadata values with fallbacks
-  const primaryColor = metadata?.primaryColor || "#ff007f"; // blue-500 #3B82F6
-  const accentColor = metadata?.accentColor || "#8B5CF6"; // purple-500 #8B5CF6
+  const primaryColor = metadata?.primaryColor || "#3b82f6"; // blue-500
+  const accentColor = metadata?.accentColor || "#8B5CF6"; // purple-500
   const voiceName = metadata?.voice || "alloy";
   const language = metadata?.language as SupportedLang;
 
@@ -84,80 +89,99 @@ export default function WidgetFrame() {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   };
 
-  // Listen for parent messages (initialization & token refresh)
-  useEffect(() => {
-    let tokenExpiryTimer: number | null = null;
-
-    function clearExpiryTimer() {
-      if (tokenExpiryTimer !== null) {
-        window.clearTimeout(tokenExpiryTimer);
-        tokenExpiryTimer = null;
+  // Notify parent that iframe is ready
+  const notifyParentReady = useCallback(() => {
+    if (kbId && !initializationRef.current) {
+      try {
+        window.parent.postMessage({ type: "AOUN_WIDGET_READY", kbId }, "*");
+        initializationRef.current = true;
+        console.log("Widget: sent ready message to parent");
+      } catch (err) {
+        console.warn("Failed to notify parent:", err);
       }
     }
+  }, [kbId]);
 
-    function scheduleExpiryNotify(
-      expires_in: number | null,
-      parentOrigin: string | null,
-    ) {
-      clearExpiryTimer();
-      if (!expires_in || !parentOrigin) return;
-      const notifyMs = Math.max(2000, (expires_in - 10) * 1000);
-      tokenExpiryTimer = window.setTimeout(() => {
-        try {
-          window.parent.postMessage(
-            { type: "AOUN_WIDGET_TOKEN_EXPIRED", kbId },
-            parentOrigin,
-          );
-        } catch (err) {
-          console.warn("Failed to post token expired to parent:", err);
-        }
-      }, notifyMs);
-    }
-
+  // Listen for parent messages (initialization & token refresh)
+  useEffect(() => {
     function onMessage(ev: MessageEvent) {
       const data = ev.data || {};
+
       if (data?.type === "AOUN_WIDGET_INIT") {
-        // If origin is provided and does not match event origin, discard
-        if (data.origin && ev.origin !== data.origin) {
-          console.warn(
-            "Discarding AOUN_WIDGET_INIT due to origin mismatch",
-            ev.origin,
-            data.origin,
-          );
+        console.log("Widget: received INIT message", {
+          hasToken: !!data.token,
+          kbId: data.kbId,
+        });
+
+        // Validate the token is for our kbId (if we have one set)
+        if (kbId && data.kbId !== kbId) {
+          console.warn("Widget: INIT kbId mismatch", {
+            expected: kbId,
+            received: data.kbId,
+          });
           return;
         }
 
         setSessionToken(data.token ?? null);
         setKbId(data.kbId ?? null);
         setMetadata(data.metadata ?? null);
+        setTokenStatus(data.token ? "ready" : "error");
 
-        scheduleExpiryNotify(data.expires_in ?? null, data.origin ?? null);
-
+        // Set welcome message based on language
         const welcomeMsg: Msg = {
           id: `welcome-${Date.now()}`,
           role: "bot",
           text:
-            language === "en"
+            data.metadata?.language === "en" || !data.metadata?.language
               ? "Hello! How can I help you today?"
               : "مرحبا! كيف يمكنني مساعدتك اليوم؟",
           createdAt: new Date().toISOString(),
         };
-        setMessages([welcomeMsg]);
+
+        setMessages((prev) => (prev.length === 0 ? [welcomeMsg] : prev));
       } else if (data?.type === "AOUN_WIDGET_TOKEN_REFRESH") {
-        setSessionToken(data.token ?? null);
-        if (data.metadata) setMetadata(data.metadata);
-        scheduleExpiryNotify(data.expires_in ?? null, ev.origin);
+        console.log("Widget: received TOKEN_REFRESH message");
+
+        if (data.kbId === kbId) {
+          setSessionToken(data.token ?? null);
+          if (data.metadata) setMetadata(data.metadata);
+          setTokenStatus(data.token ? "ready" : "error");
+        }
       } else if (data?.type === "AOUN_WIDGET_MESSAGE") {
-        console.log("Parent message:", data.payload);
+        console.log("Widget: parent message:", data.payload);
       }
     }
 
     window.addEventListener("message", onMessage);
     return () => {
       window.removeEventListener("message", onMessage);
-      clearExpiryTimer();
     };
-  }, [kbId, language]);
+  }, [kbId]);
+
+  // Send ready signal when component mounts and when kbId changes
+  useEffect(() => {
+    if (kbId) {
+      notifyParentReady();
+    }
+  }, [kbId, notifyParentReady]);
+
+  // Initial setup - try to get kbId from URL if not provided by parent
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlKbId = urlParams.get("kbid");
+
+    if (urlKbId && !kbId) {
+      console.log("Widget: setting kbId from URL:", urlKbId);
+      setKbId(urlKbId);
+    }
+
+    // Send ready message after a brief delay to ensure parent is listening
+    const timer = setTimeout(() => {
+      notifyParentReady();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [kbId, notifyParentReady]);
 
   // Check microphone permission on mount
   useEffect(() => {
@@ -220,7 +244,14 @@ export default function WidgetFrame() {
   // Text chat functions
   const sendTextMessage = async () => {
     const message = textInput.trim();
-    if (!message || !kbId) return;
+    if (!message || !kbId || tokenStatus !== "ready") {
+      console.warn("Widget: cannot send message", {
+        message: !!message,
+        kbId: !!kbId,
+        tokenStatus,
+      });
+      return;
+    }
 
     setTextInput("");
     setIsTyping(true);
@@ -253,6 +284,10 @@ export default function WidgetFrame() {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          setTokenStatus("error");
+          throw new Error("Authentication failed - token may be expired");
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -297,6 +332,7 @@ export default function WidgetFrame() {
     }
   };
 
+  // [Rest of the component methods remain the same...]
   const generateTTS = async (text: string, messageId: string) => {
     try {
       const response = await fetch("/api/tts", {
@@ -321,12 +357,8 @@ export default function WidgetFrame() {
   };
 
   const startRecording = async () => {
-    if (permission === false) {
-      console.error(
-        language === "en"
-          ? "Microphone permission denied"
-          : "تم رفض إذن الوصول إلى الميكروبات",
-      );
+    if (permission === false || tokenStatus !== "ready") {
+      console.error("Cannot start recording", { permission, tokenStatus });
       return;
     }
 
@@ -397,8 +429,11 @@ export default function WidgetFrame() {
   };
 
   const sendVoiceMessage = async (blob: Blob) => {
-    if (blob.size === 0) {
-      console.error(language === "en" ? "Recording empty" : "التسجيل فارغ");
+    if (blob.size === 0 || tokenStatus !== "ready") {
+      console.error("Cannot send voice message", {
+        blobSize: blob.size,
+        tokenStatus,
+      });
       return;
     }
 
@@ -446,6 +481,9 @@ export default function WidgetFrame() {
           if (response.ok) {
             data = await response.json();
             break;
+          } else if (response.status === 401) {
+            setTokenStatus("error");
+            throw new Error("Authentication failed");
           }
         } catch (error) {
           console.warn(`${endpoint} failed:`, error);
@@ -469,8 +507,7 @@ export default function WidgetFrame() {
           transcript ||
           (language === "en"
             ? "Voice message (no transcript)"
-            : "رسالة صوتية (لا يوجد نص)") ||
-          "Voice message (no transcript)",
+            : "رسالة صوتية (لا يوجد نص)"),
       });
 
       const botMsg: Msg = {
@@ -586,9 +623,50 @@ export default function WidgetFrame() {
 
   const isRtl = language === "ar";
   const pending = isTyping || voicePending;
+  const isReady = tokenStatus === "ready" && kbId && sessionToken;
+
+  // Show loading state while waiting for initialization
+  if (tokenStatus === "pending") {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Spinner />
+          <p className="text-sm text-gray-600">
+            {language === "en" ? "Initializing..." : "...جاري التهيئة"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if token failed
+  if (tokenStatus === "error") {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="text-red-500">
+            <MessageSquare className="h-8 w-8" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-red-700">
+              {language === "en" ? "Connection Error" : "خطأ في الاتصال"}
+            </p>
+            <p className="text-xs text-red-600">
+              {language === "en"
+                ? "Please check your configuration and try again"
+                : "يرجى التحقق من الإعدادات والمحاولة مرة أخرى"}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col", isRtl && "rtl")}>
+    <div
+      className={cn("flex h-full min-h-0 flex-col", isRtl && "rtl")}
+      dir={isRtl ? "rtl" : "ltr"}
+    >
       {/* Header */}
       <div
         className="flex items-center justify-between border-b p-4"
@@ -637,6 +715,7 @@ export default function WidgetFrame() {
               variant={mode === "text" ? "default" : "ghost"}
               size="sm"
               onClick={() => setMode("text")}
+              disabled={!isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 ease-out hover:text-white! ${mode === "text" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
               style={
                 {
@@ -650,7 +729,7 @@ export default function WidgetFrame() {
               variant={mode === "voice" ? "default" : "ghost"}
               size="sm"
               onClick={() => setMode("voice")}
-              disabled={permission === false}
+              disabled={permission === false || !isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 hover:text-white! ${mode === "voice" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
               style={
                 {
@@ -666,6 +745,7 @@ export default function WidgetFrame() {
             variant="ghost"
             size="icon"
             onClick={() => setAudioEnabled(!audioEnabled)}
+            disabled={!isReady}
             className="h-7 w-7 hover:bg-[var(--primary)]! hover:text-white!"
             title={
               audioEnabled
@@ -694,6 +774,7 @@ export default function WidgetFrame() {
               variant="ghost"
               size="icon"
               onClick={clearMessages}
+              disabled={!isReady}
               className="h-8 w-8 hover:bg-[var(--primary)]! hover:text-white!"
               title={language === "en" ? "Clear messages" : "مسح الرسائل"}
               style={
@@ -903,14 +984,14 @@ export default function WidgetFrame() {
                 placeholder={
                   language === "en" ? "Type your message..." : "اكتب رسالتك..."
                 }
-                disabled={pending}
+                disabled={pending || !isReady}
                 className="focus-visible:border-[var(--primary)] focus-visible:ring-[3px] focus-visible:ring-[var(--primary)]/50"
                 style={{ "--primary": primaryColor } as React.CSSProperties}
               />
             </div>
             <Button
               onClick={sendTextMessage}
-              disabled={!textInput.trim() || pending || !kbId}
+              disabled={!textInput.trim() || pending || !isReady}
               style={{ background: primaryColor }}
               className="text-white"
             >
@@ -936,7 +1017,7 @@ export default function WidgetFrame() {
               {!recording ? (
                 <Button
                   onClick={startRecording}
-                  disabled={voicePending || permission === false || !kbId}
+                  disabled={voicePending || permission === false || !isReady}
                   className={cn(
                     "h-16 w-16 rounded-full p-0 transition-all duration-200",
                     "shadow-lg hover:scale-105 hover:shadow-xl",

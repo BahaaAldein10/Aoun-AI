@@ -111,26 +111,38 @@ export async function createKb(params: CreateKbParams) {
   if (!userId) throw new Error("Not authenticated");
 
   try {
-    const kb = await prisma.knowledgeBase.create({
+    const bot = await prisma.bot.create({
       data: {
-        title,
-        description,
+        name: title,
         userId,
-        metadata: {
-          personality,
-          voice,
-          primaryColor,
-          accentColor,
-          faq,
-          url,
-          files,
-          allowedOrigins,
-          language,
+        description,
+        status: "DEPLOYED",
+        knowledgeBases: {
+          create: {
+            title,
+            description,
+            userId,
+            metadata: {
+              personality,
+              voice,
+              primaryColor,
+              accentColor,
+              faq,
+              url,
+              files,
+              allowedOrigins,
+              language,
+            },
+          },
         },
+      },
+      include: {
+        knowledgeBases: true,
       },
     });
 
-    return kb;
+    const kb = bot.knowledgeBases[0];
+    return { bot, kb };
   } catch (error) {
     console.log(error);
     throw new Error("Failed to create Knowledge Base");
@@ -162,27 +174,36 @@ export async function updateKb(params: CreateKbParams) {
     });
     if (!existingKb) throw new Error("Knowledge Base not found");
 
-    const kb = await prisma.knowledgeBase.update({
-      where: { id: existingKb.id, userId },
-      data: {
-        title,
-        description,
-        metadata: {
-          ...(existingKb.metadata as object),
-          personality,
-          voice,
-          primaryColor,
-          accentColor,
-          faq,
-          url,
-          files,
-          allowedOrigins,
-          language,
+    const [kb, bot] = await prisma.$transaction([
+      prisma.knowledgeBase.update({
+        where: { id: existingKb.id, userId },
+        data: {
+          title,
+          description,
+          metadata: {
+            ...(existingKb.metadata as object),
+            personality,
+            voice,
+            primaryColor,
+            accentColor,
+            faq,
+            url,
+            files,
+            allowedOrigins,
+            language,
+          },
         },
-      },
-    });
+      }),
+      prisma.bot.update({
+        where: { id: existingKb.botId! },
+        data: {
+          ...(title && { name: title }),
+          ...(description && { description }),
+        },
+      }),
+    ]);
 
-    return kb;
+    return { kb, bot };
   } catch (error) {
     console.error(error);
     if (error instanceof Error) {

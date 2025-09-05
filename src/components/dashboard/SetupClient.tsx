@@ -327,7 +327,7 @@ const SetupClient = ({
       // Start processing jobs (crawling/file processing)
       if (res) {
         try {
-          const processingResult = await qstash(res);
+          const processingResult = await qstash(res.kb);
 
           // Show more specific success messages
           if (

@@ -434,7 +434,7 @@
     "instructions_title": "Instructions",
     "instructions_step1": "Copy the HTML snippet above.",
     "instructions_step2": "Paste it into the <body> tag of your website.",
-    "instructions_step3": "Replace 'YOUR_KB_ID' with your knowledge base's unique ID.",
+    "instructions_step3": "Replace 'YOUR_API_KEY' with your website widget's API key.",
     "toast_success_title": "Copied!",
     "toast_success_desc": "The {type} has been copied to your clipboard.",
     "toast_error_title": "Copy Failed",
@@ -1148,17 +1148,15 @@
     "th_success_rate": "Success Rate"
   },
   "widget": {
-    "open_chat": "Open Chat",
     "dialog_title": "Voice Call Interface",
     "dialog_description": "Interact with our AI voice assistant.",
-
     "start_voice_chat": "Start Voice Chat",
     "voice_chat_aria": "Voice Chat",
     "voice_assistant": "Voice Assistant",
+    "chat_assistant": "Chat Assistant",
     "powered_by_openai": "Powered by OpenAI",
     "minimize_aria": "Minimize",
     "close_aria": "Close",
-
     "recording_status": "Recording...",
     "processing_status": "Processing...",
     "messages_count": "messages",
@@ -1167,6 +1165,11 @@
     "clear_messages": "Clear messages",
     "start_voice_conversation": "Start a voice conversation",
     "start_conversation_description": "Tap the microphone to speak and get an AI response",
+    "start_conversation": "Start a conversation",
+    "type_message_or_switch": "Type a message or switch to voice mode",
+    "mode_text": "Text",
+    "mode_voice": "Voice",
+    "placeholder_type_message": "Type your message...",
     "pause": "Pause",
     "play": "Play",
     "processing_message": "Processing your message...",
@@ -1174,7 +1177,6 @@
     "stop_recording": "Stop recording",
     "tap_stop_recording": "Tap to stop recording",
     "tap_to_record": "Hold to record or tap to start",
-
     "microphone_permission_denied": "Microphone permission denied",
     "failed_start_recording": "Failed to start recording. Please check microphone permissions.",
     "recording_empty": "Recording is empty. Please try again.",
@@ -1187,7 +1189,10 @@
     "voice_processing_failed": "Voice processing failed. Please try again.",
     "failed_play_audio": "Failed to play audio",
     "messages_cleared": "Messages cleared",
-    "microphone_access_denied": "Microphone access denied. Please enable it in your browser settings."
+    "microphone_access_denied": "Microphone access denied. Please enable it in your browser settings.",
+    "send": "Send",
+    "failed_send_message": "Failed to send message",
+    "error_processing_message": "Sorry, I encountered an error processing your message."
   },
   "faq_page": {
     "title": "Frequently Asked Questions",

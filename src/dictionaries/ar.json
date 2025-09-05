@@ -435,7 +435,7 @@
     "instructions_title": "التعليمات",
     "instructions_step1": "انسخ الكود HTML أعلاه.",
     "instructions_step2": "ألصقه داخل وسم <body> في موقعك.",
-    "instructions_step3": "استبدل 'YOUR_KB_ID' بمعرّف قاعدة المعرفة الخاصة بك.",
+    "instructions_step3": "استبدل 'YOUR_API_KEY' بمفتاح الـ API الخاص بك.",
     "toast_success_title": "تم النسخ!",
     "toast_success_desc": "تم نسخ {type} إلى الحافظة.",
     "toast_error_title": "فشل النسخ",
@@ -1149,25 +1149,28 @@
     "th_success_rate": "معدل النجاح"
   },
   "widget": {
-    "open_chat": "افتح الدردشة",
     "dialog_title": "واجهة المكالمات الصوتية",
     "dialog_description": "تفاعل مع مساعدنا الصوتي الذكي.",
-
     "start_voice_chat": "ابدأ محادثة صوتية",
     "voice_chat_aria": "محادثة صوتية",
     "voice_assistant": "المساعد الصوتي",
+    "chat_assistant": "مساعد المحادثة",
     "powered_by_openai": "مدعوم بواسطة OpenAI",
     "minimize_aria": "تصغير",
     "close_aria": "إغلاق",
-
     "recording_status": "جاري التسجيل...",
     "processing_status": "جاري المعالجة...",
-    "messages_count": "رسالة",
+    "messages_count": "رسائل",
     "disable_audio": "إيقاف الصوت",
     "enable_audio": "تشغيل الصوت",
     "clear_messages": "مسح الرسائل",
     "start_voice_conversation": "ابدأ محادثة صوتية",
     "start_conversation_description": "اضغط على الميكروفون للتحدث والحصول على رد من الذكاء الاصطناعي",
+    "start_conversation": "ابدأ محادثة",
+    "type_message_or_switch": "اكتب رسالة أو انتقل للوضع الصوتي",
+    "mode_text": "نص",
+    "mode_voice": "صوت",
+    "placeholder_type_message": "اكتب رسالتك...",
     "pause": "إيقاف مؤقت",
     "play": "تشغيل",
     "processing_message": "جاري معالجة رسالتك...",
@@ -1175,7 +1178,6 @@
     "stop_recording": "أوقف التسجيل",
     "tap_stop_recording": "اضغط لإيقاف التسجيل",
     "tap_to_record": "اضغط مع الاستمرار للتسجيل أو اضغط للبدء",
-
     "microphone_permission_denied": "تم رفض إذن الميكروفون",
     "failed_start_recording": "فشل في بدء التسجيل. يرجى التحقق من أذونات الميكروفون.",
     "recording_empty": "التسجيل فارغ. يرجى المحاولة مرة أخرى.",
@@ -1188,7 +1190,10 @@
     "voice_processing_failed": "فشل في معالجة الصوت. يرجى المحاولة مرة أخرى.",
     "failed_play_audio": "فشل في تشغيل الصوت",
     "messages_cleared": "تم مسح الرسائل",
-    "microphone_access_denied": "تم رفض الوصول للميكروفون. يرجى تفعيله في إعدادات المتصفح."
+    "microphone_access_denied": "تم رفض الوصول للميكروفون. يرجى تفعيله في إعدادات المتصفح.",
+    "send": "إرسال",
+    "failed_send_message": "فشل إرسال الرسالة",
+    "error_processing_message": "عذراً، واجهت مشكلة عند معالجة رسالتك."
   },
   "faq_page": {
     "title": "الأسئلة الشائعة",

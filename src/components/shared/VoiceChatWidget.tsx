@@ -27,13 +27,13 @@ type Msg = {
   audioUrl?: string | null;
   createdAt: string;
   isPlaying?: boolean;
-  isVoice?: boolean; // indicates if message was sent via voice
+  isVoice?: boolean;
 };
 
 interface VoiceChatWidgetProps {
   lang?: string;
   onClose?: () => void;
-  kbId?: string; // knowledge base ID for chat
+  kbId?: string;
 }
 
 export default function VoiceChatWidget({
@@ -44,13 +44,11 @@ export default function VoiceChatWidget({
   const dict = useDictionary();
   const t = dict.widget;
 
-  // Chat state
   const [messages, setMessages] = useState<Msg[]>([]);
   const [textInput, setTextInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
-  // Voice state
   const [recording, setRecording] = useState(false);
   const [voicePending, setVoicePending] = useState(false);
   const [permission, setPermission] = useState<boolean | null>(null);
@@ -58,10 +56,8 @@ export default function VoiceChatWidget({
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
 
-  // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
 
-  // Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -69,12 +65,10 @@ export default function VoiceChatWidget({
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Check microphone permission on mount
   useEffect(() => {
     checkMicrophonePermission();
   }, []);
 
-  // Auto scroll messages
   useEffect(() => {
     if (!listRef.current) return;
     const scrollElement = listRef.current;
@@ -84,7 +78,6 @@ export default function VoiceChatWidget({
     });
   }, [messages]);
 
-  // Recording timer
   useEffect(() => {
     if (recording) {
       setRecordingTime(0);
@@ -127,7 +120,6 @@ export default function VoiceChatWidget({
     );
   }, []);
 
-  // Text chat functions
   const sendTextMessage = async () => {
     const message = textInput.trim();
     if (!message || !kbId) return;
@@ -135,7 +127,6 @@ export default function VoiceChatWidget({
     setTextInput("");
     setIsTyping(true);
 
-    // Add user message
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
       role: "user",
@@ -167,14 +158,12 @@ export default function VoiceChatWidget({
       }
 
       const data = await response.json();
-      const reply = data.text?.trim() || "I couldn't generate a response.";
+      const reply = data.text?.trim() || t.no_response_generated;
 
-      // Update or create conversation ID
       if (data.conversationId && !conversationId) {
         setConversationId(data.conversationId);
       }
 
-      // Add bot response
       const botMsg: Msg = {
         id: `b-${Date.now()}`,
         role: "bot",
@@ -184,7 +173,6 @@ export default function VoiceChatWidget({
       };
       pushMessage(botMsg);
 
-      // Optional: Generate TTS for the reply
       if (audioEnabled) {
         generateTTS(reply, botMsg.id);
       }
@@ -193,18 +181,17 @@ export default function VoiceChatWidget({
       const errorMsg: Msg = {
         id: `err-${Date.now()}`,
         role: "bot",
-        text: "Sorry, I encountered an error processing your message.",
+        text: t.error_processing_message,
         createdAt: new Date().toISOString(),
         isVoice: false,
       };
       pushMessage(errorMsg);
-      toast.error("Failed to send message");
+      toast.error(t.failed_send_message);
     } finally {
       setIsTyping(false);
     }
   };
 
-  // TTS generation for text responses
   const generateTTS = async (text: string, messageId: string) => {
     try {
       const response = await fetch("/api/tts", {
@@ -228,7 +215,6 @@ export default function VoiceChatWidget({
     }
   };
 
-  // Voice chat functions (from your existing code)
   const startRecording = async () => {
     if (permission === false) {
       toast.error(t.microphone_permission_denied);
@@ -344,7 +330,6 @@ export default function VoiceChatWidget({
       const reply = data.reply?.trim() || "";
       const audioUrl = data.audio || null;
 
-      // Update conversation ID
       if (data.conversationId && !conversationId) {
         setConversationId(data.conversationId);
       }
@@ -387,7 +372,6 @@ export default function VoiceChatWidget({
     }
   };
 
-  // Audio playback functions
   const playAudio = (messageId: string, url: string) => {
     if (!audioEnabled) return;
 
@@ -467,7 +451,6 @@ export default function VoiceChatWidget({
 
   return (
     <div className={cn("flex h-full flex-col", isRtl && "rtl")}>
-      {/* Header */}
       <div className="flex items-center justify-between border-b bg-gradient-to-r from-blue-50 to-purple-50 p-4 dark:from-blue-950/20 dark:to-purple-950/20">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
@@ -479,7 +462,7 @@ export default function VoiceChatWidget({
           </div>
           <div>
             <h3 className="text-sm font-semibold">
-              {mode === "voice" ? t.voice_assistant : "Chat Assistant"}
+              {mode === "voice" ? t.voice_assistant : t.chat_assistant}
             </h3>
             <p className="text-muted-foreground text-xs">
               {recording
@@ -492,7 +475,6 @@ export default function VoiceChatWidget({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mode Toggle */}
           <div className="flex rounded-lg bg-gray-200 p-1 dark:bg-gray-700">
             <Button
               variant={mode === "text" ? "default" : "ghost"}
@@ -500,7 +482,7 @@ export default function VoiceChatWidget({
               onClick={() => setMode("text")}
               className="h-7 px-3 text-xs"
             >
-              Text
+              {t.mode_text}
             </Button>
             <Button
               variant={mode === "voice" ? "default" : "ghost"}
@@ -509,7 +491,7 @@ export default function VoiceChatWidget({
               className="h-7 px-3 text-xs"
               disabled={permission === false}
             >
-              Voice
+              {t.mode_voice}
             </Button>
           </div>
 
@@ -541,7 +523,6 @@ export default function VoiceChatWidget({
         </div>
       </div>
 
-      {/* Messages */}
       <div ref={listRef} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">
@@ -556,12 +537,12 @@ export default function VoiceChatWidget({
               <p className="text-sm font-medium">
                 {mode === "voice"
                   ? t.start_voice_conversation
-                  : "Start a conversation"}
+                  : t.start_conversation}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
                 {mode === "voice"
                   ? t.start_conversation_description
-                  : "Type a message or switch to voice mode"}
+                  : t.type_message_or_switch}
               </p>
             </div>
           </div>
@@ -596,7 +577,6 @@ export default function VoiceChatWidget({
                 >
                   <div className="whitespace-pre-wrap">{msg.text}</div>
 
-                  {/* Voice indicator */}
                   {msg.isVoice && (
                     <div className="absolute -top-2 -right-2">
                       <div className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-500 text-white">
@@ -669,10 +649,8 @@ export default function VoiceChatWidget({
         )}
       </div>
 
-      {/* Input Controls */}
       <div className="border-t bg-white p-4 dark:bg-gray-950">
         {mode === "text" ? (
-          /* Text Input */
           <div className="flex items-center gap-2">
             <div className="flex-1">
               <Input
@@ -680,19 +658,19 @@ export default function VoiceChatWidget({
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your message..."
+                placeholder={t.placeholder_type_message}
                 disabled={pending}
               />
             </div>
             <Button
               onClick={sendTextMessage}
               disabled={!textInput.trim() || pending || !kbId}
+              title={t.send}
             >
               {pending ? <Spinner /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
         ) : (
-          /* Voice Controls */
           <>
             {permission === false && (
               <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
