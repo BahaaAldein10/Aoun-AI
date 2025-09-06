@@ -1,7 +1,12 @@
 // src/app/api/voice/route.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { prisma } from "@/lib/prisma";
-import { Redis } from "@upstash/redis";
+import {
+  CacheService,
+  checkRateLimit,
+  getUserIdentifier,
+  createHash,
+} from "@/lib/upstash";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
@@ -10,62 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30; // seconds - serverless slot
 
-// Upstash Redis (optional) for rate limiting
-let upstashRedis: Redis | null = null;
-try {
-  if (
-    process.env.UPSTASH_REDIS_REST_URL &&
-    process.env.UPSTASH_REDIS_REST_TOKEN
-  ) {
-    upstashRedis = Redis.fromEnv();
-  }
-} catch (err) {
-  console.warn("Upstash Redis init failed:", err);
-}
-
-// In-memory fallback (dev only)
-const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
-
-function getIpKey(req: NextRequest) {
-  const forwarded = req.headers.get("x-forwarded-for");
-  const ip = forwarded
-    ? forwarded.split(",")[0]
-    : req.headers.get("x-real-ip") || "unknown";
-  return ip;
-}
-
-async function checkRateLimit(
-  key: string,
-  maxRequests = 10,
-  windowMs = 60_000,
-) {
-  try {
-    if (upstashRedis) {
-      // Use a simple counter with expire
-      const count = await upstashRedis.incr(key);
-      if (count === 1)
-        await upstashRedis.expire(key, Math.floor(windowMs / 1000));
-      return count <= maxRequests
-        ? { ok: true, remaining: Math.max(0, maxRequests - count) }
-        : { ok: false, remaining: 0 };
-    }
-  } catch (err) {
-    console.warn(
-      "Upstash rate limit check failed, falling back to memory store:",
-      err,
-    );
-  }
-
-  const now = Date.now();
-  const record = rateLimitStore.get(key);
-  if (!record || now > record.resetTime) {
-    rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
-    return { ok: true, remaining: maxRequests - 1 };
-  }
-  if (record.count >= maxRequests) return { ok: false, remaining: 0 };
-  record.count++;
-  return { ok: true, remaining: Math.max(0, maxRequests - record.count) };
-}
+const cache = CacheService.getInstance();
 
 // Security helpers
 function sha256Hex(input: string) {
@@ -101,16 +51,6 @@ const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25MB
 
 export async function POST(request: NextRequest) {
   try {
-    // Basic rate limiting by IP or by KB/api-key (later)
-    const ip = getIpKey(request);
-    const rl = await checkRateLimit(`voice_api_ip_${ip}`, 10, 60_000);
-    if (!rl.ok) {
-      return NextResponse.json(
-        { error: "Rate limit exceeded" },
-        { status: 429 },
-      );
-    }
-
     // Parse incoming credentials (authorization header may be JWT or API key)
     const authHeader = (request.headers.get("authorization") || "").replace(
       /^Bearer\s+/,
@@ -130,6 +70,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Rate limiting with user identification
+    const userIdentifier = getUserIdentifier(request, widgetPayload);
+    const rateLimit = await checkRateLimit(userIdentifier, "voice");
+
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        {
+          error: "Rate limit exceeded",
+          limit: rateLimit.limit,
+          remaining: rateLimit.remaining,
+          reset: rateLimit.reset.toISOString(),
+        },
+        { status: 429 },
+      );
+    }
+
     // Support both multipart/form-data (file upload) and JSON body with data URL
     const contentType = request.headers.get("content-type") || "";
     let audioBuffer: Uint8Array | null = null;
@@ -140,7 +96,6 @@ export async function POST(request: NextRequest) {
 
     if (contentType.startsWith("multipart/form-data")) {
       const form = await request.formData();
-      // kbId can be provided as field
       kbId = (form.get("kbId") as string) || undefined;
       conversationId = (form.get("conversationId") as string) || undefined;
       voiceName = (form.get("voiceName") as string) || undefined;
@@ -187,34 +142,34 @@ export async function POST(request: NextRequest) {
     if (!kbId)
       return NextResponse.json({ error: "Missing kbId" }, { status: 400 });
 
-    // Rate-limit per KB / token if needed
-    const kbRateKey =
-      widgetPayload?.kbId === kbId
-        ? `voice_api_widget_${kbId}`
-        : authHeader
-          ? `voice_api_key_${authHeader}`
-          : `voice_api_kb_${kbId}`;
-    const rl2 = await checkRateLimit(kbRateKey, 60, 60_000);
-    if (!rl2.ok)
-      return NextResponse.json(
-        { error: "Rate limit exceeded" },
-        { status: 429 },
-      );
+    // Load KB metadata from cache first, then DB if needed
+    let kbData = await cache.getKbMetadata(kbId);
+    if (!kbData) {
+      const kb = await prisma.knowledgeBase.findUnique({
+        where: { id: kbId },
+        select: { id: true, userId: true, metadata: true },
+      });
 
-    // Load KB metadata & owner
-    const kb = await prisma.knowledgeBase.findUnique({
-      where: { id: kbId },
-      select: { id: true, userId: true, metadata: true },
-    });
-    if (!kb)
-      return NextResponse.json(
-        { error: "Knowledge base not found" },
-        { status: 404 },
-      );
+      if (!kb) {
+        return NextResponse.json(
+          { error: "Knowledge base not found" },
+          { status: 404 },
+        );
+      }
 
-    const metadata: Record<string, any> =
-      (kb.metadata as Record<string, any>) ?? {};
+      kbData = {
+        id: kb.id,
+        userId: kb.userId,
+        metadata: (kb.metadata as Record<string, any>) ?? {},
+      };
 
+      // Cache for future requests
+      await cache.setKbMetadata(kbId, kbData);
+    }
+
+    const metadata = kbData.metadata;
+
+    // Authentication checks
     if (widgetPayload) {
       // ensure token's kbId matches
       if (widgetPayload.kbId !== kbId) {
@@ -245,9 +200,6 @@ export async function POST(request: NextRequest) {
           { status: 403 },
         );
       }
-
-      // NOTE: do NOT require requestOrigin === widgetPayload.origin.
-      // The requestOrigin will be the iframe host (your app), whereas widgetPayload.origin is the embedding page.
     } else {
       // No widget token: require API key (KB is private)
       const storedHash =
@@ -292,132 +244,165 @@ export async function POST(request: NextRequest) {
 
     // If no audio buffer but transcript provided by client, use it and skip transcription
     let transcript = transcriptFromClient ?? null;
+    let audioHash: string | null = null;
 
-    // If we have an audio buffer, transcribe with OpenAI Whisper
+    // If we have an audio buffer, check cache first, then transcribe with OpenAI Whisper
     if (!transcript && audioBuffer) {
-      // create a blob & multipart for OpenAI
-      const formData = new FormData();
-      // Convert Uint8Array to Blob/ File-like using Buffer
-      const file = new Blob([Buffer.from(audioBuffer)], { type: "audio/webm" });
-      formData.append("file", file, "audio.webm");
-      formData.append("model", "whisper-1");
-      formData.append("language", "auto");
-      formData.append("response_format", "verbose_json");
+      // Create hash of audio for caching
+      audioHash = createHash(Buffer.from(audioBuffer).toString("base64"));
 
-      const resp = await fetch(
-        "https://api.openai.com/v1/audio/transcriptions",
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${OPENAI_KEY}` },
-          body: formData as any,
-        },
-      );
+      // Check if we've transcribed this audio before
+      transcript = await cache.getTranscription(audioHash);
 
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        console.error("Whisper transcription failed:", resp.status, txt);
-        return NextResponse.json(
-          { error: "Transcription failed" },
-          { status: 502 },
+      if (!transcript) {
+        // create a blob & multipart for OpenAI
+        const formData = new FormData();
+        // Convert Uint8Array to Blob/ File-like using Buffer
+        const file = new Blob([Buffer.from(audioBuffer)], {
+          type: "audio/webm",
+        });
+        formData.append("file", file, "audio.webm");
+        formData.append("model", "whisper-1");
+        formData.append("language", "auto");
+        formData.append("response_format", "verbose_json");
+
+        const resp = await fetch(
+          "https://api.openai.com/v1/audio/transcriptions",
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+            body: formData as any,
+          },
         );
+
+        if (!resp.ok) {
+          const txt = await resp.text().catch(() => "");
+          console.error("Whisper transcription failed:", resp.status, txt);
+          return NextResponse.json(
+            { error: "Transcription failed" },
+            { status: 502 },
+          );
+        }
+
+        const json = await resp.json();
+        transcript = (json?.text || "").trim();
+        if (!transcript)
+          return NextResponse.json(
+            { error: "No speech detected" },
+            { status: 400 },
+          );
+
+        // Cache the transcription
+        await cache.setTranscription(audioHash, transcript);
       }
-
-      const json = await resp.json();
-      transcript = (json?.text || "").trim();
-      if (!transcript)
-        return NextResponse.json(
-          { error: "No speech detected" },
-          { status: 400 },
-        );
     }
 
     // Language detection (simple heuristic)
     const isArabic = /[\u0600-\u06FF]/.test(transcript ?? "");
 
-    // Build system prompt & call LLM (using OpenAI Responses endpoint if available)
+    // Build system prompt & call LLM
     const llmModel =
       process.env.LLM_MODEL || process.env.CHAT_MODEL || "gpt-4o-mini";
     const systemPrompt = isArabic
       ? "أنت مساعد ذكي يتحدث العربية. كن مفيداً ومختصراً في إجاباتك. أجب باللغة العربية."
       : "You are a helpful assistant. Keep responses concise and in the user's language.";
 
-    // Call your chosen LLM endpoint. Using OpenAI Responses API (robust across SDKs).
-    const llmResp = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: llmModel,
-        input: `${systemPrompt}\n\nUser: ${transcript}`,
-        max_output_tokens: 800,
-        temperature: 0.2,
-      }),
-    });
+    // Check if we have a cached LLM response for this transcript
+    const responseHash = createHash(`${systemPrompt}:${transcript}`);
+    let reply = await cache.get<string>(`llm_response:${responseHash}`);
 
-    if (!llmResp.ok) {
-      const txt = await llmResp.text().catch(() => "");
-      console.error("LLM call failed:", llmResp.status, txt);
-      return NextResponse.json(
-        { error: "Failed to generate response" },
-        { status: 502 },
-      );
-    }
-
-    const llmJson = await llmResp.json();
-    // robustly extract text
-    let reply = "";
-    if (Array.isArray(llmJson.output)) {
-      reply = llmJson.output
-        .map((o: any) =>
-          (o?.content || [])
-            .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
-            .join(" "),
-        )
-        .join(" ")
-        .trim();
-    } else if (typeof llmJson.output_text === "string") {
-      reply = llmJson.output_text;
-    } else {
-      reply =
-        String(llmJson?.output?.[0]?.content?.[0]?.text ?? "") ||
-        String(llmJson?.choices?.[0]?.message?.content ?? "");
-    }
-    reply = reply || "I couldn't generate a response.";
-
-    // Optional: TTS generation (best-effort). If TTS fails, we still return transcript+reply.
-    let audioDataUrl: string | null = null;
-    try {
-      const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
+    if (!reply) {
+      // Call OpenAI Responses API
+      const llmResp = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${OPENAI_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "tts-1",
-          input: reply,
-          voice: isArabic ? voiceName || "nova" : voiceName || "alloy",
-          response_format: "mp3",
-          speed: 1.0,
+          model: llmModel,
+          input: `${systemPrompt}\n\nUser: ${transcript}`,
+          max_output_tokens: 800,
+          temperature: 0.2,
         }),
       });
 
-      if (ttsResp.ok) {
-        const ab = await ttsResp.arrayBuffer();
-        const b64 = Buffer.from(ab).toString("base64");
-        audioDataUrl = `data:audio/mp3;base64,${b64}`;
-      } else {
-        const txt = await ttsResp.text().catch(() => "");
-        console.warn(
-          "TTS failed, continuing without audio:",
-          ttsResp.status,
-          txt,
+      if (!llmResp.ok) {
+        const txt = await llmResp.text().catch(() => "");
+        console.error("LLM call failed:", llmResp.status, txt);
+        return NextResponse.json(
+          { error: "Failed to generate response" },
+          { status: 502 },
         );
       }
-    } catch (ttsErr) {
-      console.warn("TTS request error - continuing without audio:", ttsErr);
+
+      const llmJson = await llmResp.json();
+      // robustly extract text
+      if (Array.isArray(llmJson.output)) {
+        reply = llmJson.output
+          .map((o: any) =>
+            (o?.content || [])
+              .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
+              .join(" "),
+          )
+          .join(" ")
+          .trim();
+      } else if (typeof llmJson.output_text === "string") {
+        reply = llmJson.output_text;
+      } else {
+        reply =
+          String(llmJson?.output?.[0]?.content?.[0]?.text ?? "") ||
+          String(llmJson?.choices?.[0]?.message?.content ?? "");
+      }
+      reply = reply || "I couldn't generate a response.";
+
+      // Cache the LLM response for 30 minutes
+      await cache.set(`llm_response:${responseHash}`, reply, 1800);
+    }
+
+    // TTS generation with caching
+    let audioDataUrl: string | null = null;
+    const voice = isArabic ? voiceName || "nova" : voiceName || "alloy";
+    const ttsHash = createHash(`${reply}:${voice}`);
+
+    // Check TTS cache first
+    audioDataUrl = await cache.getTtsAudio(ttsHash, voice);
+
+    if (!audioDataUrl) {
+      try {
+        const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${OPENAI_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "tts-1",
+            input: reply,
+            voice: voice,
+            response_format: "mp3",
+            speed: 1.0,
+          }),
+        });
+
+        if (ttsResp.ok) {
+          const ab = await ttsResp.arrayBuffer();
+          const b64 = Buffer.from(ab).toString("base64");
+          audioDataUrl = `data:audio/mp3;base64,${b64}`;
+
+          // Cache the TTS audio
+          await cache.setTtsAudio(ttsHash, voice, audioDataUrl);
+        } else {
+          const txt = await ttsResp.text().catch(() => "");
+          console.warn(
+            "TTS failed, continuing without audio:",
+            ttsResp.status,
+            txt,
+          );
+        }
+      } catch (ttsErr) {
+        console.warn("TTS request error - continuing without audio:", ttsErr);
+      }
     }
 
     // Create a simple conversationId for voice session if not provided
@@ -430,7 +415,7 @@ export async function POST(request: NextRequest) {
       try {
         await prisma.usage.create({
           data: {
-            userId: kb.userId,
+            userId: kbData.userId,
             botId: null,
             date: new Date(),
             interactions: 1,
@@ -439,6 +424,14 @@ export async function POST(request: NextRequest) {
               kbId,
               transcriptLength: transcript?.length ?? 0,
               replyLength: reply.length,
+              cached: {
+                transcript:
+                  !!audioHash && !!(await cache.getTranscription(audioHash)),
+                llmResponse: !!(await cache.get(
+                  `llm_response:${responseHash}`,
+                )),
+                ttsAudio: !!(await cache.getTtsAudio(ttsHash, voice)),
+              },
             },
           },
         });
@@ -456,6 +449,10 @@ export async function POST(request: NextRequest) {
       source: "llm",
       history: [], // you can expand this in the future
       language: isArabic ? "ar" : "en",
+      rateLimit: {
+        remaining: rateLimit.remaining,
+        reset: rateLimit.reset.toISOString(),
+      },
     });
   } catch (err) {
     console.error("Voice API error:", err);
