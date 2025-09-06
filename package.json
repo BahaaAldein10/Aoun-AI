@@ -45,6 +45,7 @@
     "@tiptap/react": "^3.2.0",
     "@tiptap/starter-kit": "^3.2.0",
     "@upstash/qstash": "^2.8.2",
+    "@upstash/ratelimit": "^2.0.6",
     "@upstash/redis": "^1.35.3",
     "@upstash/vector": "^1.2.2",
     "bcryptjs": "^3.0.2",

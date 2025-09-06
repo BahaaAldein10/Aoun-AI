@@ -39,16 +39,6 @@ const EmptyState = ({
           <Button asChild className="w-full sm:w-auto">
             <Link href={`/${lang}/dashboard/setup`}>{t.cta_create_bot}</Link>
           </Button>
-
-          <Button variant="outline" asChild className="w-full sm:w-auto">
-            <Link href={`/${lang}/dashboard/knowledge-base`}>
-              {t.cta_upload_docs}
-            </Link>
-          </Button>
-
-          <Button variant="ghost" asChild className="w-full sm:w-auto">
-            <Link href={`/${lang}/docs/getting-started`}>{t.cta_docs}</Link>
-          </Button>
         </CardFooter>
       </Card>
     </div>

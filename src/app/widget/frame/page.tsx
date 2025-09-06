@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/app/widget/frame/page.tsx
 "use client";
 
@@ -36,9 +37,6 @@ export default function WidgetFrame() {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [kbId, setKbId] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<KbMetadata | null>(null);
-  const [tokenStatus, setTokenStatus] = useState<"pending" | "ready" | "error">(
-    "pending",
-  );
 
   // Chat state
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -54,6 +52,9 @@ export default function WidgetFrame() {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
 
+  // Continuous mode (auto re-listen after bot audio ends)
+  const [continuous, setContinuous] = useState<boolean>(false);
+
   // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
 
@@ -62,15 +63,19 @@ export default function WidgetFrame() {
   const chunksRef = useRef<Blob[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const initializationRef = useRef<boolean>(false);
+
+  // SpeechRecognition refs and interim transcript
+  const recognitionRef = useRef<any>(null);
+  const [interimTranscript, setInterimTranscript] = useState<string>("");
 
   // Extract metadata values with fallbacks
   const primaryColor = metadata?.primaryColor || "#3b82f6"; // blue-500
   const accentColor = metadata?.accentColor || "#8B5CF6"; // purple-500
   const voiceName = metadata?.voice || "alloy";
-  const language = metadata?.language as SupportedLang;
+  const language = (metadata?.language as SupportedLang) ?? "en";
 
   // Helper: convert hex to rgba
   const hexToRgba = (hex: string, alpha = 1) => {
@@ -125,7 +130,6 @@ export default function WidgetFrame() {
         setSessionToken(data.token ?? null);
         setKbId(data.kbId ?? null);
         setMetadata(data.metadata ?? null);
-        setTokenStatus(data.token ? "ready" : "error");
 
         // Set welcome message based on language
         const welcomeMsg: Msg = {
@@ -145,7 +149,6 @@ export default function WidgetFrame() {
         if (data.kbId === kbId) {
           setSessionToken(data.token ?? null);
           if (data.metadata) setMetadata(data.metadata);
-          setTokenStatus(data.token ? "ready" : "error");
         }
       } else if (data?.type === "AOUN_WIDGET_MESSAGE") {
         console.log("Widget: parent message:", data.payload);
@@ -167,12 +170,16 @@ export default function WidgetFrame() {
 
   // Initial setup - try to get kbId from URL if not provided by parent
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const urlKbId = urlParams.get("kbid");
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlKbId = urlParams.get("kbid");
 
-    if (urlKbId && !kbId) {
-      console.log("Widget: setting kbId from URL:", urlKbId);
-      setKbId(urlKbId);
+      if (urlKbId && !kbId) {
+        console.log("Widget: setting kbId from URL:", urlKbId);
+        setKbId(urlKbId);
+      }
+    } catch (e) {
+      // ignore in non-browser server rendering
     }
 
     // Send ready message after a brief delay to ensure parent is listening
@@ -202,12 +209,12 @@ export default function WidgetFrame() {
   useEffect(() => {
     if (recording) {
       setRecordingTime(0);
-      recordingTimerRef.current = setInterval(() => {
+      recordingTimerRef.current = window.setInterval(() => {
         setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      }, 1000) as unknown as number;
     } else {
       if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
+        clearInterval(recordingTimerRef.current as number);
         recordingTimerRef.current = null;
       }
       setRecordingTime(0);
@@ -215,7 +222,7 @@ export default function WidgetFrame() {
 
     return () => {
       if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
+        clearInterval(recordingTimerRef.current as number);
       }
     };
   }, [recording]);
@@ -241,14 +248,69 @@ export default function WidgetFrame() {
     );
   }, []);
 
+  // ------------------------
+  // SpeechRecognition (optional, for live interim transcript while recording)
+  // ------------------------
+  function startLocalRecognition() {
+    try {
+      const globalAny: any = window as any;
+      const SpeechRecognition =
+        globalAny.SpeechRecognition || globalAny.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        recognitionRef.current = null;
+        return;
+      }
+      const rec = new SpeechRecognition();
+      rec.interimResults = true;
+      rec.lang = language === "ar" ? "ar-SA" : "en-US";
+      rec.maxAlternatives = 1;
+      rec.onresult = (ev: any) => {
+        let interim = "";
+        let final = "";
+        for (let i = ev.resultIndex; i < ev.results.length; ++i) {
+          const r = ev.results[i];
+          if (r.isFinal) final += r[0].transcript;
+          else interim += r[0].transcript;
+        }
+        setInterimTranscript((final || interim || "").trim());
+      };
+      rec.onerror = (e: any) => {
+        console.warn("SpeechRecognition error:", e);
+      };
+      rec.onend = () => {
+        // leave last captured interim until server final result replaces it
+      };
+      rec.start();
+      recognitionRef.current = rec;
+    } catch (e) {
+      console.warn("startLocalRecognition failed:", e);
+      recognitionRef.current = null;
+    }
+  }
+
+  function stopLocalRecognition() {
+    try {
+      if (
+        recognitionRef.current &&
+        typeof recognitionRef.current.stop === "function"
+      ) {
+        recognitionRef.current.stop();
+      }
+      recognitionRef.current = null;
+    } catch {
+      recognitionRef.current = null;
+    }
+  }
+
+  // ------------------------
   // Text chat functions
+  // ------------------------
   const sendTextMessage = async () => {
     const message = textInput.trim();
-    if (!message || !kbId || tokenStatus !== "ready") {
+    if (!message || !kbId) {
       console.warn("Widget: cannot send message", {
         message: !!message,
         kbId: !!kbId,
-        tokenStatus,
       });
       return;
     }
@@ -284,10 +346,6 @@ export default function WidgetFrame() {
       });
 
       if (!response.ok) {
-        if (response.status === 401) {
-          setTokenStatus("error");
-          throw new Error("Authentication failed - token may be expired");
-        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -332,33 +390,39 @@ export default function WidgetFrame() {
     }
   };
 
-  // [Rest of the component methods remain the same...]
   const generateTTS = async (text: string, messageId: string) => {
     try {
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
         body: JSON.stringify({
           text,
           voice: voiceName,
           speed: 1.0,
+          kbId,
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        updateMessage(messageId, { audioUrl: data.audioUrl });
+        updateMessage(messageId, {
+          audioUrl: data.audioUrl || data.audio || null,
+        });
       }
     } catch (error) {
       console.warn("TTS generation failed:", error);
     }
   };
 
+  // ------------------------
+  // Recording (MediaRecorder)
+  // ------------------------
   const startRecording = async () => {
-    if (permission === false || tokenStatus !== "ready") {
-      console.error("Cannot start recording", { permission, tokenStatus });
+    if (permission === false || !kbId) {
+      console.error("Cannot start recording", { permission, kbId });
       return;
     }
 
@@ -397,7 +461,14 @@ export default function WidgetFrame() {
       });
 
       mediaRecorder.addEventListener("stop", async () => {
-        stream.getTracks().forEach((track) => track.stop());
+        try {
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {
+          // ignore
+        }
+
+        // Stop local recognition and capture last interim
+        stopLocalRecognition();
 
         if (chunksRef.current.length > 0) {
           const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -405,7 +476,10 @@ export default function WidgetFrame() {
         }
       });
 
-      mediaRecorder.start(1000);
+      // start local recognition if supported (gives interim transcript)
+      startLocalRecognition();
+
+      mediaRecorder.start(250); // chunk every 250ms
       setRecording(true);
 
       if ("vibrate" in navigator) {
@@ -419,7 +493,12 @@ export default function WidgetFrame() {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && recording) {
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {
+        console.warn("mediaRecorder.stop() failed:", e);
+      }
+      mediaRecorderRef.current = null;
       setRecording(false);
 
       if ("vibrate" in navigator) {
@@ -428,12 +507,12 @@ export default function WidgetFrame() {
     }
   };
 
+  // ------------------------
+  // Send voice blob to server (/api/call -> /api/voice)
+  // ------------------------
   const sendVoiceMessage = async (blob: Blob) => {
-    if (blob.size === 0 || tokenStatus !== "ready") {
-      console.error("Cannot send voice message", {
-        blobSize: blob.size,
-        tokenStatus,
-      });
+    if (blob.size === 0) {
+      console.error("Cannot send empty voice blob");
       return;
     }
 
@@ -444,17 +523,20 @@ export default function WidgetFrame() {
       return;
     }
 
+    // show user's interim message (if any)
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
       role: "user",
       text:
-        language === "en"
+        interimTranscript ||
+        (language === "en"
           ? "Processing voice message..."
-          : "جاري معالجة رسالة الصوت...",
+          : "جاري معالجة رسالة الصوت..."),
       createdAt: new Date().toISOString(),
       isVoice: true,
     };
     pushMessage(userMsg);
+    setInterimTranscript("");
 
     const formData = new FormData();
     formData.append("audio", blob, "voice.webm");
@@ -481,9 +563,9 @@ export default function WidgetFrame() {
           if (response.ok) {
             data = await response.json();
             break;
-          } else if (response.status === 401) {
-            setTokenStatus("error");
-            throw new Error("Authentication failed");
+          } else {
+            const txt = await response.text().catch(() => "");
+            console.warn(`${endpoint} returned ${response.status}: ${txt}`);
           }
         } catch (error) {
           console.warn(`${endpoint} failed:`, error);
@@ -523,7 +605,11 @@ export default function WidgetFrame() {
       pushMessage(botMsg);
 
       if (audioUrl && audioEnabled) {
-        setTimeout(() => playAudio(botMsg.id, audioUrl), 500);
+        // play and if continuous is ON, auto-restart recording after audio ends
+        await playAudio(botMsg.id, audioUrl, continuous);
+      } else if (continuous) {
+        // If continuous and no audio, restart recording
+        setTimeout(() => startRecording(), 300);
       }
     } catch (error) {
       console.error("Voice processing error:", error);
@@ -550,11 +636,20 @@ export default function WidgetFrame() {
     }
   };
 
-  const playAudio = (messageId: string, url: string) => {
+  // ------------------------
+  // Playback
+  // ------------------------
+  const playAudio = async (
+    messageId: string,
+    url: string,
+    autoRestartAfter = false,
+  ) => {
     if (!audioEnabled) return;
 
     if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
+      try {
+        currentAudioRef.current.pause();
+      } catch {}
       currentAudioRef.current = null;
     }
 
@@ -574,6 +669,11 @@ export default function WidgetFrame() {
       setCurrentlyPlaying(null);
       updateMessage(messageId, { isPlaying: false });
       currentAudioRef.current = null;
+      if (autoRestartAfter) {
+        setTimeout(() => {
+          if (continuous) startRecording();
+        }, 300);
+      }
     };
 
     audio.onerror = (error) => {
@@ -581,16 +681,23 @@ export default function WidgetFrame() {
       setCurrentlyPlaying(null);
       updateMessage(messageId, { isPlaying: false });
       currentAudioRef.current = null;
+      if (autoRestartAfter && continuous) {
+        setTimeout(() => startRecording(), 300);
+      }
     };
 
-    audio.play().catch((error) => {
-      console.error("Audio play failed:", error);
-    });
+    try {
+      await audio.play();
+    } catch (err) {
+      console.error("Audio play failed:", err);
+    }
   };
 
   const stopAudio = () => {
     if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
+      try {
+        currentAudioRef.current.pause();
+      } catch {}
       currentAudioRef.current = null;
     }
 
@@ -623,44 +730,7 @@ export default function WidgetFrame() {
 
   const isRtl = language === "ar";
   const pending = isTyping || voicePending;
-  const isReady = tokenStatus === "ready" && kbId && sessionToken;
-
-  // Show loading state while waiting for initialization
-  if (tokenStatus === "pending") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Spinner />
-          <p className="text-sm text-gray-600">
-            {language === "en" ? "Initializing..." : "...جاري التهيئة"}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // Show error state if token failed
-  if (tokenStatus === "error") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <div className="text-red-500">
-            <MessageSquare className="h-8 w-8" />
-          </div>
-          <div>
-            <p className="text-sm font-medium text-red-700">
-              {language === "en" ? "Connection Error" : "خطأ في الاتصال"}
-            </p>
-            <p className="text-xs text-red-600">
-              {language === "en"
-                ? "Please check your configuration and try again"
-                : "يرجى التحقق من الإعدادات والمحاولة مرة أخرى"}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const isReady = Boolean(kbId);
 
   return (
     <div
@@ -1013,6 +1083,39 @@ export default function WidgetFrame() {
               </div>
             )}
 
+            {/* Continuous toggle + status */}
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <label className="text-sm">
+                  {language === "en" ? "Continuous" : "متواصل"}
+                </label>
+                <input
+                  type="checkbox"
+                  checked={continuous}
+                  onChange={() => setContinuous((v) => !v)}
+                  disabled={!isReady}
+                />
+                <span className="text-muted-foreground ml-2 text-xs">
+                  {continuous
+                    ? language === "en"
+                      ? "Auto re-listen"
+                      : "إعادة الاستماع أوتوماتيكياً"
+                    : language === "en"
+                      ? "Push to talk"
+                      : "اضغط وتحدث"}
+                </span>
+              </div>
+              <div className="text-muted-foreground text-xs">
+                {recording
+                  ? `${language === "en" ? "Recording" : "جاري التسجيل"} ${formatTime(recordingTime)}`
+                  : pending
+                    ? language === "en"
+                      ? "Processing..."
+                      : "جاري المعالجة..."
+                    : ""}
+              </div>
+            </div>
+
             <div className="flex items-center justify-center">
               {!recording ? (
                 <Button
@@ -1044,6 +1147,15 @@ export default function WidgetFrame() {
                 </Button>
               )}
             </div>
+
+            {interimTranscript && (
+              <div className="text-muted-foreground mt-3 rounded p-2 text-sm">
+                <strong>
+                  {language === "en" ? "You (live): " : "أنت (مباشر): "}
+                </strong>
+                <span>{interimTranscript}</span>
+              </div>
+            )}
 
             <div className="mt-3 text-center">
               <p className="text-muted-foreground text-xs">

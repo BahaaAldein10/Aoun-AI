@@ -1,44 +1,40 @@
-// src/app/api/chat/route.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const runtime = "nodejs";
 
-import type { ChunkMetadata } from "@/lib/embedding-service";
-import { prisma } from "@/lib/prisma";
-import { upstashSearchSimilar } from "@/search/upstash-search";
-import { Redis } from "@upstash/redis";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
 
 // ---------- Config ----------
 const OPENAI_MODEL = process.env.CHAT_MODEL || "gpt-4o-mini";
 const DEFAULT_TOP_K = Number(process.env.CHAT_DEFAULT_TOP_K ?? 5);
 const MAX_TOP_K = Number(process.env.CHAT_MAX_TOP_K ?? 8);
 const MAX_PROMPT_TOKENS = Number(process.env.CHAT_MAX_CONTEXT_TOKENS ?? 3000);
-const RATE_LIMIT_WINDOW_SECONDS = 60;
-const RATE_LIMIT_MAX_PER_WINDOW = 60; // per IP / API key / widget token
 const JWT_SECRET = process.env.WIDGET_JWT_SECRET!;
-
 if (!JWT_SECRET) throw new Error("WIDGET_JWT_SECRET not defined");
 
-// ---------- OpenAI ----------
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// ---------- Upstash Redis ----------
-let upstashRedis: Redis | null = null;
-try {
-  if (
-    process.env.UPSTASH_REDIS_REST_URL &&
-    process.env.UPSTASH_REDIS_REST_TOKEN
-  ) {
-    upstashRedis = Redis.fromEnv();
-  }
-} catch (err) {
-  console.warn("Upstash init failed:", err);
+// ---------- Helpers reused from your original file ----------
+function sanitizeText(s: string) {
+  return (s || "").toString().trim();
+}
+function estimateMinutesFromText(text?: string | null, wpm = 200) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return 0;
+  return Math.max(1, Math.ceil(words / wpm));
 }
 
 // ---------- Types ----------
+type ChunkMetadata = {
+  documentId?: string;
+  filename?: string;
+  sourceUrl?: string;
+  chunkIndex?: number;
+  totalChunks?: number;
+  startOffset?: number;
+  endOffset?: number;
+};
+
 type ChatRequestBody = {
   kbId?: string;
   message?: string;
@@ -48,58 +44,115 @@ type ChatRequestBody = {
   topK?: number;
 };
 
-// ---------- Helpers ----------
-function sanitizeText(s: string) {
-  return (s || "").toString().trim();
-}
-
-async function rateLimit(key: string) {
-  try {
-    if (upstashRedis) {
-      const count = await upstashRedis.incr(key);
-      if (count === 1)
-        await upstashRedis.expire(key, RATE_LIMIT_WINDOW_SECONDS);
-      const remaining = Math.max(0, RATE_LIMIT_MAX_PER_WINDOW - count);
-      return { ok: count <= RATE_LIMIT_MAX_PER_WINDOW, remaining, count };
-    } else {
-      // fallback local dev
-      (global as any).__chat_rate_map =
-        (global as any).__chat_rate_map || new Map();
-      const map = (global as any).__chat_rate_map as Map<
-        string,
-        { count: number; expiresAt: number }
-      >;
-      const now = Date.now();
-      const entry = map.get(key);
-      if (!entry || entry.expiresAt < now) {
-        map.set(key, {
-          count: 1,
-          expiresAt: now + RATE_LIMIT_WINDOW_SECONDS * 1000,
-        });
-        return { ok: true, remaining: RATE_LIMIT_MAX_PER_WINDOW - 1, count: 1 };
-      } else {
-        entry.count++;
-        map.set(key, entry);
-        return {
-          ok: entry.count <= RATE_LIMIT_MAX_PER_WINDOW,
-          remaining: Math.max(0, RATE_LIMIT_MAX_PER_WINDOW - entry.count),
-          count: entry.count,
-        };
-      }
-    }
-  } catch (err) {
-    console.warn("Rate limit check failed — allowing request:", err);
-    return { ok: true, remaining: RATE_LIMIT_MAX_PER_WINDOW, count: 0 };
-  }
-}
-
-// ---------- POST Handler ----------
+// ---------- POST ----------
 export async function POST(req: Request) {
+  // Lazy imports and initializations inside handler
+  const [
+    { createEmbeddings },
+    { prisma },
+    upstashModule,
+    upstashVectorModule,
+    upstashSearchModule,
+  ] = await Promise.all([
+    import("@/lib/embedding-service"),
+    import("@/lib/prisma"),
+    import("@/lib/upstash"),
+    import("@/lib/upstash-vector"),
+    import("@/search/upstash-search"),
+  ]);
+
+  const { CacheService, checkRateLimit, createHash, getUserIdentifier } =
+    upstashModule as any;
+  const upstashVector = (upstashVectorModule as any).default;
+  const { upstashSearchSimilar } = upstashSearchModule as any;
+
+  // Lazy-init OpenAI and cache
+  const OpenAI = (await import("openai")).default;
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const cache = CacheService.getInstance();
+
+  // Usage logging helper (same logic, but using dynamic prisma above)
+  async function logUsageAtomic(opts: {
+    userId?: string | null;
+    botId?: string | null;
+    kbId: string;
+    conversationId?: string | null;
+    cached: boolean;
+    promptSize: number;
+    retrievedCount: number;
+    minutes?: number;
+    extraMeta?: Record<string, any>;
+  }) {
+    const {
+      userId,
+      botId,
+      kbId,
+      conversationId,
+      cached,
+      promptSize,
+      retrievedCount,
+      minutes = 0,
+      extraMeta,
+    } = opts;
+
+    try {
+      const hasSelector = Boolean(userId || botId);
+      if (hasSelector) {
+        const where: Record<string, any> = {};
+        if (userId) where.userId = userId;
+        if (botId) where.botId = botId;
+
+        const updateRes = await prisma.usage.updateMany({
+          where,
+          data: {
+            interactions: { increment: 1 },
+            minutes: { increment: minutes },
+            date: new Date(),
+            meta: {
+              set: {
+                ...(extraMeta ?? {}),
+                kbId,
+                conversationId: conversationId ?? null,
+                cached,
+                promptSize,
+                retrievedCount,
+                lastSeenAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+
+        if ((updateRes?.count ?? 0) > 0) {
+          return;
+        }
+      }
+
+      // fallback create
+      await prisma.usage.create({
+        data: {
+          userId: userId ?? null,
+          botId: botId ?? null,
+          date: new Date(),
+          interactions: 1,
+          minutes: minutes,
+          meta: {
+            kbId,
+            conversationId: conversationId ?? null,
+            cached,
+            promptSize,
+            retrievedCount,
+            ...(extraMeta ?? {}),
+            createdAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (err) {
+      console.warn("Failed to write usage log (atomic):", err);
+    }
+  }
+
   try {
-    const ip =
-      req.headers.get("x-forwarded-for") ||
-      req.headers.get("x-real-ip") ||
-      "unknown";
     const body = (await req.json().catch(() => ({}))) as ChatRequestBody;
     const {
       kbId,
@@ -115,7 +168,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
 
-    // --- Widget JWT verification ---
+    // Widget JWT verification
     const authHeader = (req.headers.get("authorization") || "").replace(
       /^Bearer\s+/,
       "",
@@ -131,7 +184,6 @@ export async function POST(req: Request) {
           origin: payload.origin as string | undefined,
         };
 
-        // require token's kbId to match requested kbId (keeps tight scoping)
         if (widgetPayload.kbId !== kbId) {
           return NextResponse.json(
             { error: "KB ID mismatch in widget token" },
@@ -143,36 +195,51 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- Rate limiting ---
-    const apiKeyHeader = authHeader || "";
-    const rateKey = widgetPayload
-      ? `chat_rate_widget_${widgetPayload.kbId}`
-      : apiKeyHeader
-        ? `chat_rate_api_${apiKeyHeader}`
-        : `chat_rate_ip_${ip}`;
-    const rl = await rateLimit(rateKey);
-    if (!rl.ok)
+    // Rate limiting
+    const userIdentifier = getUserIdentifier(req, widgetPayload);
+    const rateLimit = await checkRateLimit(userIdentifier, "chat");
+
+    if (!rateLimit.success) {
       return NextResponse.json(
-        { error: "Rate limit exceeded" },
+        {
+          error: "Rate limit exceeded",
+          limit: rateLimit.limit,
+          remaining: rateLimit.remaining,
+          reset: rateLimit.reset.toISOString(),
+        },
         { status: 429 },
       );
+    }
 
-    // --- Load KB ---
+    // Load KB
     const kb = await prisma.knowledgeBase.findUnique({
       where: { id: kbId },
-      select: { id: true, title: true, metadata: true, userId: true },
+      select: {
+        id: true,
+        title: true,
+        metadata: true,
+        userId: true,
+        botId: true,
+      },
     });
+
     if (!kb)
       return NextResponse.json(
         { error: "Knowledge base not found" },
         { status: 404 },
       );
 
-    const metadata: Record<string, any> =
-      (kb.metadata as Record<string, any>) ?? {};
+    const kbData = {
+      id: kb.id,
+      title: kb.title,
+      userId: kb.userId,
+      botId: kb.botId,
+      metadata: (kb.metadata as Record<string, any>) ?? {},
+    };
 
-    // If the request used a widget token, ensure the token's parent origin
-    // (the page that requested the token) is allowed for this KB.
+    const metadata = kbData.metadata ?? {};
+
+    // Widget origin check if widget token used
     if (widgetPayload) {
       const allowedOrigins = Array.isArray(metadata.allowedOrigins)
         ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
@@ -186,7 +253,6 @@ export async function POST(req: Request) {
           );
         }
       } else {
-        // token has no origin — treat as invalid for widget usage
         return NextResponse.json(
           { error: "Invalid widget token (missing origin)" },
           { status: 403 },
@@ -194,40 +260,32 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- API key protection for private KBs ---
+    // API key protection for private KBs
     if (!widgetPayload) {
       const storedHashHex =
         typeof metadata.apiKeyHash === "string"
           ? metadata.apiKeyHash
           : undefined;
-
-      // Always-private: require an API key hash to be configured.
       if (!storedHashHex) {
         return NextResponse.json(
           { error: "Knowledge base is private; API key required" },
           { status: 401 },
         );
       }
-
-      // Ensure there is an incoming header
-      if (!apiKeyHeader) {
+      if (!authHeader) {
         return NextResponse.json(
           { error: "Unauthorized for this KB" },
           { status: 401 },
         );
       }
 
-      // Normalize incoming token (trim) then hash and compare with stored hex using timingSafeEqual
-      const incomingToken = apiKeyHeader.trim();
-
+      const incomingToken = authHeader.trim();
       const incomingHashBuf = crypto
         .createHash("sha256")
         .update(incomingToken, "utf8")
-        .digest(); // Buffer
-
+        .digest();
       const storedHashBuf = Buffer.from(storedHashHex, "hex");
 
-      // timingSafeEqual requires buffers to have same length
       if (
         storedHashBuf.length !== incomingHashBuf.length ||
         !crypto.timingSafeEqual(storedHashBuf, incomingHashBuf)
@@ -239,22 +297,90 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- Determine topK ---
+    // topK
     const topK = Math.max(
       1,
       Math.min(MAX_TOP_K, Number(requestedTopK ?? DEFAULT_TOP_K)),
     );
 
-    // --- Retrieval ---
+    // Check chat cache for exact message
+    const messageHash = createHash(message);
+    const cachedResponse = await cache.getChatResponse(kbId, messageHash);
+
+    if (cachedResponse) {
+      const minutes = estimateMinutesFromText(message);
+      void logUsageAtomic({
+        userId: kbData.userId,
+        botId: kbData.botId,
+        kbId,
+        conversationId: conversationId ?? null,
+        cached: true,
+        promptSize: message.length,
+        retrievedCount: cachedResponse.sources?.length ?? 0,
+        minutes,
+      });
+
+      return NextResponse.json({
+        success: true,
+        text: cachedResponse.text,
+        conversationId: conversationId ?? null,
+        sources: cachedResponse.sources,
+        rateLimit: { remaining: rateLimit.remaining },
+        cached: true,
+      });
+    }
+
+    // Retrieval / embedding
     let retrieved: Array<{
       text: string;
       similarity: number;
       metadata: ChunkMetadata;
     }> = [];
+
     try {
-      retrieved = await upstashSearchSimilar(kbId, message, topK);
+      const cachedEmbedding = await cache.getEmbedding(message);
+      let queryVec: number[] | undefined = undefined;
+
+      if (Array.isArray(cachedEmbedding) && cachedEmbedding.length > 0) {
+        queryVec = cachedEmbedding as number[];
+      } else {
+        const embeddings = await createEmbeddings([message]);
+        queryVec = embeddings[0];
+        if (queryVec) await cache.setEmbedding(message, queryVec);
+      }
+
+      if (queryVec) {
+        const results = await upstashVector.query(queryVec, {
+          topK,
+          includeMetadata: true,
+          includeVectors: false,
+          filter: `kbId = '${kbId.replace(/'/g, "\\'")}'`,
+        });
+
+        retrieved = (results ?? []).map((result: any) => {
+          const md = result.metadata as Record<string, unknown> | undefined;
+          const text = (md?.text as string) ?? "";
+          const metadata: ChunkMetadata = {
+            documentId: (md?.documentId as string) ?? "",
+            filename: (md?.filename as string) ?? "",
+            sourceUrl: (md?.sourceUrl as string) ?? "",
+            chunkIndex: Number(md?.chunkIndex ?? 0),
+            totalChunks: Number(md?.totalChunks ?? 1),
+            startOffset: Number(md?.startOffset ?? 0),
+            endOffset: Number(md?.endOffset ?? 0),
+          };
+          return {
+            text,
+            similarity: result.score ?? 0,
+            metadata,
+          };
+        });
+      } else {
+        retrieved = await upstashSearchSimilar(kbId, message, topK);
+      }
     } catch (err) {
       console.error("Retrieval failed:", err);
+      retrieved = [];
     }
 
     const sourceBlocks = retrieved.map((r, i) => {
@@ -263,7 +389,7 @@ export async function POST(req: Request) {
       return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // --- Build prompt ---
+    // Build prompt
     const personality = (metadata?.personality as string) ?? "";
     const systemInstruction =
       `You are an assistant answering user questions using the provided sources. ${personality}`.trim();
@@ -281,7 +407,7 @@ export async function POST(req: Request) {
     const userBlock = `User: ${sanitizeText(message)}\nAssistant:`;
     let prompt = `${systemInstruction}\n\n${retrievalText}${historyText}${userBlock}`;
 
-    // --- Trim prompt if too long ---
+    // Trim prompt if too long
     if (prompt.length > MAX_PROMPT_TOKENS * 4) {
       while (sourceBlocks.length && prompt.length > MAX_PROMPT_TOKENS * 4) {
         sourceBlocks.pop();
@@ -292,70 +418,79 @@ export async function POST(req: Request) {
       }
     }
 
-    // --- OpenAI response ---
-    let assistantText = "";
-    try {
-      const resp: any = await openai.responses.create({
-        model: OPENAI_MODEL,
-        input: prompt,
-        max_output_tokens: 800,
-        temperature: 0.1,
-      });
+    // Check prompt-level LLM cache
+    const promptHash = createHash(prompt);
+    let assistantText = await cache.get(`chat_llm:${promptHash}`);
 
-      if (resp?.output && Array.isArray(resp.output)) {
-        assistantText = resp.output
-          .map((o: any) =>
-            (o?.content || [])
-              .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
-              .join(" "),
-          )
-          .join(" ")
-          .trim();
-      } else if (typeof resp?.output_text === "string") {
-        assistantText = resp.output_text;
-      } else {
-        assistantText = String(resp?.output?.[0]?.content?.[0]?.text ?? "");
+    if (!assistantText) {
+      try {
+        const resp: any = await openai.responses.create({
+          model: OPENAI_MODEL,
+          input: prompt,
+          max_output_tokens: 800,
+          temperature: 0.1,
+        });
+
+        if (resp?.output && Array.isArray(resp.output)) {
+          assistantText = resp.output
+            .map((o: any) =>
+              (o?.content || [])
+                .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
+                .join(" "),
+            )
+            .join(" ")
+            .trim();
+        } else if (typeof resp?.output_text === "string") {
+          assistantText = resp.output_text;
+        } else {
+          assistantText = String(resp?.output?.[0]?.content?.[0]?.text ?? "");
+        }
+
+        if (assistantText) {
+          await cache.set(`chat_llm:${promptHash}`, assistantText, 1800);
+        }
+      } catch (err) {
+        console.error("LLM call failed:", err);
+        return NextResponse.json(
+          { error: "LLM call failed", details: String(err) },
+          { status: 500 },
+        );
       }
-    } catch (err) {
-      console.error("LLM call failed:", err);
-      return NextResponse.json(
-        { error: "LLM call failed", details: String(err) },
-        { status: 500 },
-      );
     }
 
-    // --- Usage logging ---
-    try {
-      await prisma.usage.create({
-        data: {
-          userId: kb.userId,
-          botId: null,
-          date: new Date(),
-          interactions: 1,
-          minutes: 0,
-          meta: {
-            kbId,
-            conversationId: conversationId ?? null,
-            promptSize: prompt.length,
-            retrievedCount: retrieved.length,
-          },
-        },
-      });
-    } catch (err) {
-      console.warn("Failed to write usage log:", err);
-    }
-
-    // --- Return reply ---
-    return NextResponse.json({
-      success: true,
-      text: assistantText,
-      conversationId: conversationId ?? null,
+    // Prepare responseData and cache full response
+    const responseData = {
+      text: assistantText ?? "",
       sources: retrieved.map((r, i) => ({
         index: i + 1,
         similarity: r.similarity,
         meta: r.metadata,
       })),
-      rateLimit: { remaining: rl.remaining ?? null },
+    };
+
+    await cache.setChatResponse(kbId, messageHash, responseData);
+
+    // Usage logging
+    const chatMinutes = estimateMinutesFromText(prompt, 200);
+    void logUsageAtomic({
+      userId: kbData.userId,
+      botId: kbData.botId,
+      kbId,
+      conversationId: conversationId ?? null,
+      cached: false,
+      promptSize: prompt.length,
+      retrievedCount: retrieved.length,
+      minutes: chatMinutes,
+    });
+
+    // Return
+    return NextResponse.json({
+      success: true,
+      text: assistantText,
+      conversationId: conversationId ?? null,
+      sources: responseData.sources,
+      rateLimit: { remaining: rateLimit.remaining },
+      cached: false,
     });
   } catch (err) {
     console.error("Chat handler error:", err);
