@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/app/widget/frame/page.tsx
 "use client";
 
@@ -19,6 +18,8 @@ import {
   Trash2,
   Volume2,
   VolumeX,
+  Phone,
+  PhoneOff,
 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -31,6 +32,14 @@ type Msg = {
   isPlaying?: boolean;
   isVoice?: boolean;
 };
+
+type CallState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "speaking"
+  | "listening"
+  | "processing";
 
 export default function WidgetFrame() {
   // Session state from parent
@@ -52,8 +61,13 @@ export default function WidgetFrame() {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
 
-  // Continuous mode (auto re-listen after bot audio ends)
-  const [continuous, setContinuous] = useState<boolean>(false);
+  // Real-time call state
+  const [callState, setCallState] = useState<CallState>("idle");
+  const [callSocket, setCallSocket] = useState<WebSocket | null>(null);
+  const [silenceTimeout, setSilenceTimeout] = useState<NodeJS.Timeout | null>(
+    null,
+  );
+  const [audioLevel, setAudioLevel] = useState(0);
 
   // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
@@ -63,19 +77,24 @@ export default function WidgetFrame() {
   const chunksRef = useRef<Blob[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const recordingTimerRef = useRef<number | null>(null);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const initializationRef = useRef<boolean>(false);
 
-  // SpeechRecognition refs and interim transcript
-  const recognitionRef = useRef<any>(null);
-  const [interimTranscript, setInterimTranscript] = useState<string>("");
+  // Real-time call refs
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const vadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const audioQueueRef = useRef<ArrayBuffer[]>([]);
+  const isPlayingResponseRef = useRef(false);
 
   // Extract metadata values with fallbacks
   const primaryColor = metadata?.primaryColor || "#3b82f6"; // blue-500
   const accentColor = metadata?.accentColor || "#8B5CF6"; // purple-500
   const voiceName = metadata?.voice || "alloy";
-  const language = (metadata?.language as SupportedLang) ?? "en";
+  const language = metadata?.language as SupportedLang;
 
   // Helper: convert hex to rgba
   const hexToRgba = (hex: string, alpha = 1) => {
@@ -118,7 +137,6 @@ export default function WidgetFrame() {
           kbId: data.kbId,
         });
 
-        // Validate the token is for our kbId (if we have one set)
         if (kbId && data.kbId !== kbId) {
           console.warn("Widget: INIT kbId mismatch", {
             expected: kbId,
@@ -131,7 +149,6 @@ export default function WidgetFrame() {
         setKbId(data.kbId ?? null);
         setMetadata(data.metadata ?? null);
 
-        // Set welcome message based on language
         const welcomeMsg: Msg = {
           id: `welcome-${Date.now()}`,
           role: "bot",
@@ -170,19 +187,14 @@ export default function WidgetFrame() {
 
   // Initial setup - try to get kbId from URL if not provided by parent
   useEffect(() => {
-    try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlKbId = urlParams.get("kbid");
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlKbId = urlParams.get("kbid");
 
-      if (urlKbId && !kbId) {
-        console.log("Widget: setting kbId from URL:", urlKbId);
-        setKbId(urlKbId);
-      }
-    } catch (e) {
-      // ignore in non-browser server rendering
+    if (urlKbId && !kbId) {
+      console.log("Widget: setting kbId from URL:", urlKbId);
+      setKbId(urlKbId);
     }
 
-    // Send ready message after a brief delay to ensure parent is listening
     const timer = setTimeout(() => {
       notifyParentReady();
     }, 100);
@@ -209,12 +221,12 @@ export default function WidgetFrame() {
   useEffect(() => {
     if (recording) {
       setRecordingTime(0);
-      recordingTimerRef.current = window.setInterval(() => {
+      recordingTimerRef.current = setInterval(() => {
         setRecordingTime((prev) => prev + 1);
-      }, 1000) as unknown as number;
+      }, 1000);
     } else {
       if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current as number);
+        clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
       setRecordingTime(0);
@@ -222,10 +234,23 @@ export default function WidgetFrame() {
 
     return () => {
       if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current as number);
+        clearInterval(recordingTimerRef.current);
       }
     };
   }, [recording]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      endCall();
+      if (vadTimeoutRef.current) {
+        clearTimeout(vadTimeoutRef.current);
+      }
+      if (silenceTimeout) {
+        clearTimeout(silenceTimeout);
+      }
+    };
+  }, []);
 
   const checkMicrophonePermission = async () => {
     try {
@@ -248,63 +273,305 @@ export default function WidgetFrame() {
     );
   }, []);
 
-  // ------------------------
-  // SpeechRecognition (optional, for live interim transcript while recording)
-  // ------------------------
-  function startLocalRecognition() {
+  // Real-time call functions
+  const startCall = async () => {
+    if (permission === false || !kbId) return;
+
     try {
-      const globalAny: any = window as any;
-      const SpeechRecognition =
-        globalAny.SpeechRecognition || globalAny.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        recognitionRef.current = null;
-        return;
-      }
-      const rec = new SpeechRecognition();
-      rec.interimResults = true;
-      rec.lang = language === "ar" ? "ar-SA" : "en-US";
-      rec.maxAlternatives = 1;
-      rec.onresult = (ev: any) => {
-        let interim = "";
-        let final = "";
-        for (let i = ev.resultIndex; i < ev.results.length; ++i) {
-          const r = ev.results[i];
-          if (r.isFinal) final += r[0].transcript;
-          else interim += r[0].transcript;
+      setCallState("connecting");
+
+      // Get microphone stream
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 16000,
+        },
+      });
+
+      streamRef.current = stream;
+
+      // Set up audio analysis for VAD (Voice Activity Detection)
+      const audioContext = new (window.AudioContext ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).webkitAudioContext)({
+        sampleRate: 16000,
+      });
+      audioContextRef.current = audioContext;
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.8;
+      analyserRef.current = analyser;
+
+      const microphone = audioContext.createMediaStreamSource(stream);
+      microphoneRef.current = microphone;
+      microphone.connect(analyser);
+
+      // Connect to real-time WebSocket
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProtocol}//${window.location.host}/api/realtime-call`;
+
+      const socket = new WebSocket(wsUrl);
+      setCallSocket(socket);
+
+      socket.onopen = () => {
+        console.log("Real-time call connected");
+        setCallState("connected");
+
+        // Send initialization
+        socket.send(
+          JSON.stringify({
+            type: "init",
+            kbId,
+            sessionToken,
+            conversationId,
+            voiceName,
+            language,
+          }),
+        );
+
+        startVoiceActivityDetection();
+      };
+
+      socket.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          switch (data.type) {
+            case "transcript":
+              if (data.text) {
+                const userMsg: Msg = {
+                  id: `u-${Date.now()}`,
+                  role: "user",
+                  text: data.text,
+                  createdAt: new Date().toISOString(),
+                  isVoice: true,
+                };
+                pushMessage(userMsg);
+              }
+              break;
+
+            case "response":
+              if (data.text) {
+                const botMsg: Msg = {
+                  id: `b-${Date.now()}`,
+                  role: "bot",
+                  text: data.text,
+                  createdAt: new Date().toISOString(),
+                  isVoice: true,
+                };
+                pushMessage(botMsg);
+              }
+
+              if (data.audio && audioEnabled) {
+                await playRealtimeAudio(data.audio);
+              }
+              break;
+
+            case "error":
+              console.error("Call error:", data.message);
+              const errorMsg: Msg = {
+                id: `err-${Date.now()}`,
+                role: "bot",
+                text:
+                  data.message ||
+                  (language === "en"
+                    ? "Call error occurred"
+                    : "حدث خطأ في المكالمة"),
+                createdAt: new Date().toISOString(),
+                isVoice: true,
+              };
+              pushMessage(errorMsg);
+              break;
+          }
+        } catch (err) {
+          console.error("Error parsing WebSocket message:", err);
         }
-        setInterimTranscript((final || interim || "").trim());
       };
-      rec.onerror = (e: any) => {
-        console.warn("SpeechRecognition error:", e);
-      };
-      rec.onend = () => {
-        // leave last captured interim until server final result replaces it
-      };
-      rec.start();
-      recognitionRef.current = rec;
-    } catch (e) {
-      console.warn("startLocalRecognition failed:", e);
-      recognitionRef.current = null;
-    }
-  }
 
-  function stopLocalRecognition() {
-    try {
-      if (
-        recognitionRef.current &&
-        typeof recognitionRef.current.stop === "function"
-      ) {
-        recognitionRef.current.stop();
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
+        setCallState("idle");
+      };
+
+      socket.onclose = () => {
+        console.log("WebSocket closed");
+        setCallState("idle");
+      };
+    } catch (error) {
+      console.error("Failed to start call:", error);
+      setCallState("idle");
+      setPermission(false);
+    }
+  };
+
+  const endCall = () => {
+    console.log("Ending call");
+
+    // Close WebSocket
+    if (callSocket) {
+      callSocket.close();
+      setCallSocket(null);
+    }
+
+    // Stop audio stream
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    // Clean up audio context
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // Clear timeouts
+    if (vadTimeoutRef.current) {
+      clearTimeout(vadTimeoutRef.current);
+      vadTimeoutRef.current = null;
+    }
+
+    if (silenceTimeout) {
+      clearTimeout(silenceTimeout);
+      setSilenceTimeout(null);
+    }
+
+    setCallState("idle");
+    setAudioLevel(0);
+    isPlayingResponseRef.current = false;
+  };
+
+  const startVoiceActivityDetection = () => {
+    if (!analyserRef.current || !callSocket) return;
+
+    const analyser = analyserRef.current;
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const detectVoice = () => {
+      if (callState === "idle" || !analyser) return;
+
+      analyser.getByteFrequencyData(dataArray);
+
+      // Calculate average volume
+      const average =
+        dataArray.reduce((sum, value) => sum + value, 0) / bufferLength;
+      setAudioLevel(average / 255);
+
+      const threshold = 25; // Voice activity threshold
+      const isVoiceActive = average > threshold;
+
+      if (isVoiceActive && !isPlayingResponseRef.current) {
+        if (callState !== "speaking") {
+          setCallState("speaking");
+
+          // Clear any existing silence timeout
+          if (silenceTimeout) {
+            clearTimeout(silenceTimeout);
+            setSilenceTimeout(null);
+          }
+        }
+
+        // Send audio data to server
+        if (streamRef.current && callSocket?.readyState === WebSocket.OPEN) {
+          const mediaRecorder = new MediaRecorder(streamRef.current, {
+            mimeType: "audio/webm;codecs=opus",
+          });
+
+          mediaRecorder.start();
+
+          mediaRecorder.ondataavailable = (event) => {
+            if (
+              event.data.size > 0 &&
+              callSocket?.readyState === WebSocket.OPEN
+            ) {
+              const reader = new FileReader();
+              reader.onload = () => {
+                if (reader.result) {
+                  callSocket.send(
+                    JSON.stringify({
+                      type: "audio",
+                      data: reader.result,
+                    }),
+                  );
+                }
+              };
+              reader.readAsDataURL(event.data);
+            }
+          };
+
+          // Stop recording after a short interval
+          setTimeout(() => {
+            if (mediaRecorder.state === "recording") {
+              mediaRecorder.stop();
+            }
+          }, 500);
+        }
+      } else if (!isVoiceActive && callState === "speaking") {
+        // Start silence timeout
+        if (silenceTimeout) {
+          clearTimeout(silenceTimeout);
+        }
+
+        const timeout = setTimeout(() => {
+          if (!isPlayingResponseRef.current) {
+            setCallState("listening");
+          }
+        }, 1000); // 1 second of silence before switching to listening
+
+        setSilenceTimeout(timeout);
       }
-      recognitionRef.current = null;
-    } catch {
-      recognitionRef.current = null;
-    }
-  }
 
-  // ------------------------
+      // Continue monitoring
+      vadTimeoutRef.current = setTimeout(detectVoice, 100);
+    };
+
+    detectVoice();
+  };
+
+  const playRealtimeAudio = async (audioData: string) => {
+    if (!audioEnabled || !audioContextRef.current) return;
+
+    try {
+      isPlayingResponseRef.current = true;
+      setCallState("processing");
+
+      // Convert base64 to array buffer
+      const binaryString = window.atob(audioData);
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const audioBuffer = await audioContextRef.current.decodeAudioData(
+        bytes.buffer,
+      );
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextRef.current.destination);
+
+      source.onended = () => {
+        isPlayingResponseRef.current = false;
+        if (callState !== "idle") {
+          setCallState("listening");
+        }
+      };
+
+      source.start();
+    } catch (error) {
+      console.error("Error playing realtime audio:", error);
+      isPlayingResponseRef.current = false;
+      if (callState !== "idle") {
+        setCallState("listening");
+      }
+    }
+  };
+
   // Text chat functions
-  // ------------------------
   const sendTextMessage = async () => {
     const message = textInput.trim();
     if (!message || !kbId) {
@@ -346,6 +613,9 @@ export default function WidgetFrame() {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          throw new Error("Authentication failed - token may be expired");
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -396,260 +666,28 @@ export default function WidgetFrame() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
         body: JSON.stringify({
           text,
           voice: voiceName,
           speed: 1.0,
-          kbId,
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        updateMessage(messageId, {
-          audioUrl: data.audioUrl || data.audio || null,
-        });
+        updateMessage(messageId, { audioUrl: data.audioUrl });
       }
     } catch (error) {
       console.warn("TTS generation failed:", error);
     }
   };
 
-  // ------------------------
-  // Recording (MediaRecorder)
-  // ------------------------
-  const startRecording = async () => {
-    if (permission === false || !kbId) {
-      console.error("Cannot start recording", { permission, kbId });
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100,
-        },
-      });
-
-      const mimeTypes = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/mp4",
-        "audio/wav",
-      ];
-
-      let mimeType = "audio/webm";
-      for (const type of mimeTypes) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          break;
-        }
-      }
-
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-
-      mediaRecorder.addEventListener("dataavailable", (event) => {
-        if (event.data && event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      });
-
-      mediaRecorder.addEventListener("stop", async () => {
-        try {
-          stream.getTracks().forEach((track) => track.stop());
-        } catch {
-          // ignore
-        }
-
-        // Stop local recognition and capture last interim
-        stopLocalRecognition();
-
-        if (chunksRef.current.length > 0) {
-          const blob = new Blob(chunksRef.current, { type: mimeType });
-          await sendVoiceMessage(blob);
-        }
-      });
-
-      // start local recognition if supported (gives interim transcript)
-      startLocalRecognition();
-
-      mediaRecorder.start(250); // chunk every 250ms
-      setRecording(true);
-
-      if ("vibrate" in navigator) {
-        navigator.vibrate(50);
-      }
-    } catch (error) {
-      console.error("Failed to start recording:", error);
-      setPermission(false);
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && recording) {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
-        console.warn("mediaRecorder.stop() failed:", e);
-      }
-      mediaRecorderRef.current = null;
-      setRecording(false);
-
-      if ("vibrate" in navigator) {
-        navigator.vibrate([50, 50, 50]);
-      }
-    }
-  };
-
-  // ------------------------
-  // Send voice blob to server (/api/call -> /api/voice)
-  // ------------------------
-  const sendVoiceMessage = async (blob: Blob) => {
-    if (blob.size === 0) {
-      console.error("Cannot send empty voice blob");
-      return;
-    }
-
-    if (blob.size < 1000) {
-      console.error(
-        language === "en" ? "Recording too short" : "التسجيل قصير جدًا",
-      );
-      return;
-    }
-
-    // show user's interim message (if any)
-    const userMsg: Msg = {
-      id: `u-${Date.now()}`,
-      role: "user",
-      text:
-        interimTranscript ||
-        (language === "en"
-          ? "Processing voice message..."
-          : "جاري معالجة رسالة الصوت..."),
-      createdAt: new Date().toISOString(),
-      isVoice: true,
-    };
-    pushMessage(userMsg);
-    setInterimTranscript("");
-
-    const formData = new FormData();
-    formData.append("audio", blob, "voice.webm");
-    if (kbId) formData.append("kbId", kbId);
-    if (conversationId) formData.append("conversationId", conversationId);
-    if (voiceName) formData.append("voiceName", voiceName);
-
-    setVoicePending(true);
-
-    try {
-      const endpoints = ["/api/call", "/api/voice"];
-      let data = null;
-
-      for (const endpoint of endpoints) {
-        try {
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: sessionToken
-              ? { Authorization: `Bearer ${sessionToken}` }
-              : {},
-            body: formData,
-          });
-
-          if (response.ok) {
-            data = await response.json();
-            break;
-          } else {
-            const txt = await response.text().catch(() => "");
-            console.warn(`${endpoint} returned ${response.status}: ${txt}`);
-          }
-        } catch (error) {
-          console.warn(`${endpoint} failed:`, error);
-        }
-      }
-
-      if (!data) {
-        throw new Error("All voice endpoints failed");
-      }
-
-      const transcript = data.text?.trim() || data.transcript?.trim() || "";
-      const reply = data.reply?.trim() || "";
-      const audioUrl = data.audio || data.audioUrl || null;
-
-      if (data.conversationId && !conversationId) {
-        setConversationId(data.conversationId);
-      }
-
-      updateMessage(userMsg.id, {
-        text:
-          transcript ||
-          (language === "en"
-            ? "Voice message (no transcript)"
-            : "رسالة صوتية (لا يوجد نص)"),
-      });
-
-      const botMsg: Msg = {
-        id: `b-${Date.now()}`,
-        role: "bot",
-        text:
-          reply ||
-          (language === "en" ? "No response generated" : "لم يتم إنشاء رد"),
-        audioUrl,
-        createdAt: new Date().toISOString(),
-        isVoice: true,
-      };
-      pushMessage(botMsg);
-
-      if (audioUrl && audioEnabled) {
-        // play and if continuous is ON, auto-restart recording after audio ends
-        await playAudio(botMsg.id, audioUrl, continuous);
-      } else if (continuous) {
-        // If continuous and no audio, restart recording
-        setTimeout(() => startRecording(), 300);
-      }
-    } catch (error) {
-      console.error("Voice processing error:", error);
-      updateMessage(userMsg.id, {
-        text:
-          language === "en"
-            ? "Failed to process voice message"
-            : "فشل في معالجة رسالة الصوت",
-      });
-
-      const errorMsg: Msg = {
-        id: `err-${Date.now()}`,
-        role: "bot",
-        text:
-          language === "en"
-            ? "Voice processing error occurred"
-            : "حدث خطأ أثناء معالجة الصوت",
-        createdAt: new Date().toISOString(),
-        isVoice: true,
-      };
-      pushMessage(errorMsg);
-    } finally {
-      setVoicePending(false);
-    }
-  };
-
-  // ------------------------
-  // Playback
-  // ------------------------
-  const playAudio = async (
-    messageId: string,
-    url: string,
-    autoRestartAfter = false,
-  ) => {
+  const playAudio = (messageId: string, url: string) => {
     if (!audioEnabled) return;
 
     if (currentAudioRef.current) {
-      try {
-        currentAudioRef.current.pause();
-      } catch {}
+      currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
 
@@ -669,11 +707,6 @@ export default function WidgetFrame() {
       setCurrentlyPlaying(null);
       updateMessage(messageId, { isPlaying: false });
       currentAudioRef.current = null;
-      if (autoRestartAfter) {
-        setTimeout(() => {
-          if (continuous) startRecording();
-        }, 300);
-      }
     };
 
     audio.onerror = (error) => {
@@ -681,23 +714,16 @@ export default function WidgetFrame() {
       setCurrentlyPlaying(null);
       updateMessage(messageId, { isPlaying: false });
       currentAudioRef.current = null;
-      if (autoRestartAfter && continuous) {
-        setTimeout(() => startRecording(), 300);
-      }
     };
 
-    try {
-      await audio.play();
-    } catch (err) {
-      console.error("Audio play failed:", err);
-    }
+    audio.play().catch((error) => {
+      console.error("Audio play failed:", error);
+    });
   };
 
   const stopAudio = () => {
     if (currentAudioRef.current) {
-      try {
-        currentAudioRef.current.pause();
-      } catch {}
+      currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
 
@@ -711,6 +737,7 @@ export default function WidgetFrame() {
 
   const clearMessages = () => {
     stopAudio();
+    endCall();
     setMessages([]);
     setConversationId(null);
   };
@@ -728,9 +755,31 @@ export default function WidgetFrame() {
     }
   };
 
+  const getCallStateText = () => {
+    switch (callState) {
+      case "connecting":
+        return language === "en" ? "Connecting..." : "جاري الاتصال...";
+      case "connected":
+        return language === "en"
+          ? "Connected - Start speaking"
+          : "متصل - ابدأ الحديث";
+      case "speaking":
+        return language === "en" ? "Listening to you..." : "أستمع إليك...";
+      case "listening":
+        return language === "en" ? "Ready to listen" : "جاهز للاستماع";
+      case "processing":
+        return language === "en"
+          ? "Processing response..."
+          : "جاري معالجة الرد...";
+      default:
+        return language === "en" ? "Start voice call" : "بدء المكالمة الصوتية";
+    }
+  };
+
   const isRtl = language === "ar";
   const pending = isTyping || voicePending;
-  const isReady = Boolean(kbId);
+  const isReady = !!kbId;
+  const isInCall = callState !== "idle";
 
   return (
     <div
@@ -746,13 +795,20 @@ export default function WidgetFrame() {
       >
         <div className="flex items-center gap-3">
           <div
-            className="flex h-10 w-10 items-center justify-center rounded-full"
+            className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-full transition-all duration-300",
+              isInCall && "animate-pulse",
+            )}
             style={{
               background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
             }}
           >
             {mode === "voice" ? (
-              <Mic className="h-5 w-5 text-white" />
+              isInCall ? (
+                <Phone className="h-5 w-5 text-white" />
+              ) : (
+                <Mic className="h-5 w-5 text-white" />
+              )
             ) : (
               <MessageSquare className="h-5 w-5 text-white" />
             )}
@@ -768,8 +824,8 @@ export default function WidgetFrame() {
                   : "مساعد الدردشة"}
             </h3>
             <p className="text-muted-foreground text-xs">
-              {recording
-                ? `${language === "en" ? "Recording" : "جاري التسجيل"} ${formatTime(recordingTime)}`
+              {isInCall
+                ? getCallStateText()
                 : pending
                   ? language === "en"
                     ? "Processing..."
@@ -784,7 +840,10 @@ export default function WidgetFrame() {
             <Button
               variant={mode === "text" ? "default" : "ghost"}
               size="sm"
-              onClick={() => setMode("text")}
+              onClick={() => {
+                if (isInCall) endCall();
+                setMode("text");
+              }}
               disabled={!isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 ease-out hover:text-white! ${mode === "text" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
               style={
@@ -798,7 +857,11 @@ export default function WidgetFrame() {
             <Button
               variant={mode === "voice" ? "default" : "ghost"}
               size="sm"
-              onClick={() => setMode("voice")}
+              onClick={() => {
+                if (permission !== false) {
+                  setMode("voice");
+                }
+              }}
               disabled={permission === false || !isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 hover:text-white! ${mode === "voice" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
               style={
@@ -864,13 +927,20 @@ export default function WidgetFrame() {
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">
             <div
-              className="flex h-16 w-16 items-center justify-center rounded-full"
+              className={cn(
+                "flex h-16 w-16 items-center justify-center rounded-full transition-all duration-300",
+                isInCall && "animate-pulse",
+              )}
               style={{
                 background: `linear-gradient(to bottom right, ${hexToRgba(primaryColor, 0.2)}, ${hexToRgba(accentColor, 0.12)})`,
               }}
             >
               {mode === "voice" ? (
-                <Mic className="h-8 w-8" style={{ color: primaryColor }} />
+                isInCall ? (
+                  <Phone className="h-8 w-8" style={{ color: primaryColor }} />
+                ) : (
+                  <Mic className="h-8 w-8" style={{ color: primaryColor }} />
+                )
               ) : (
                 <MessageSquare
                   className="h-8 w-8"
@@ -880,24 +950,58 @@ export default function WidgetFrame() {
             </div>
             <div>
               <p className="text-sm font-medium">
-                {mode === "voice"
-                  ? language === "en"
-                    ? "Start a voice conversation"
-                    : "ابدأ محادثة صوتية"
-                  : language === "en"
-                    ? "Start a conversation"
-                    : "ابدأ محادثة"}
+                {isInCall
+                  ? getCallStateText()
+                  : mode === "voice"
+                    ? language === "en"
+                      ? "Start a voice conversation"
+                      : "ابدأ محادثة صوتية"
+                    : language === "en"
+                      ? "Start a conversation"
+                      : "ابدأ محادثة"}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
-                {mode === "voice"
+                {isInCall
                   ? language === "en"
-                    ? "Click the microphone to record"
-                    : "اضغط على الميكروفون للتسجيل"
-                  : language === "en"
-                    ? "Type a message or switch to voice mode"
-                    : "اكتب رسالة أو قم بالتبديل إلى الوضع الصوتي"}
+                    ? "Speak naturally - I'll respond in real-time"
+                    : "تحدث بطبيعية - سأرد في الوقت الفعلي"
+                  : mode === "voice"
+                    ? language === "en"
+                      ? "Click the call button to start"
+                      : "اضغط على زر المكالمة للبدء"
+                    : language === "en"
+                      ? "Type a message or switch to voice mode"
+                      : "اكتب رسالة أو قم بالتبديل إلى الوضع الصوتي"}
               </p>
             </div>
+
+            {/* Voice level indicator for active call */}
+            {isInCall && (
+              <div className="mt-4 flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  {[...Array(5)].map((_, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "h-1 w-1 rounded-full transition-all duration-150",
+                        audioLevel * 5 > i
+                          ? "scale-125 bg-green-500"
+                          : "bg-gray-300 dark:bg-gray-600",
+                      )}
+                    />
+                  ))}
+                </div>
+                <span className="text-muted-foreground text-xs">
+                  {callState === "speaking"
+                    ? language === "en"
+                      ? "Speaking"
+                      : "يتحدث"
+                    : language === "en"
+                      ? "Listening"
+                      : "يستمع"}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           messages.map((msg) => (
@@ -1083,90 +1187,92 @@ export default function WidgetFrame() {
               </div>
             )}
 
-            {/* Continuous toggle + status */}
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <label className="text-sm">
-                  {language === "en" ? "Continuous" : "متواصل"}
-                </label>
-                <input
-                  type="checkbox"
-                  checked={continuous}
-                  onChange={() => setContinuous((v) => !v)}
-                  disabled={!isReady}
-                />
-                <span className="text-muted-foreground ml-2 text-xs">
-                  {continuous
-                    ? language === "en"
-                      ? "Auto re-listen"
-                      : "إعادة الاستماع أوتوماتيكياً"
-                    : language === "en"
-                      ? "Push to talk"
-                      : "اضغط وتحدث"}
-                </span>
+            <div className="flex flex-col items-center gap-4">
+              {/* Real-time call controls */}
+              <div className="flex items-center justify-center">
+                {!isInCall ? (
+                  <Button
+                    onClick={startCall}
+                    disabled={permission === false || !isReady}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "shadow-lg hover:scale-105 hover:shadow-xl",
+                      "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+                    )}
+                    title={
+                      language === "en"
+                        ? "Start voice call"
+                        : "ابدأ المكالمة الصوتية"
+                    }
+                    style={{
+                      background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
+                    }}
+                  >
+                    <Phone className="h-8 w-8 text-white" />
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={endCall}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
+                      "shadow-lg hover:shadow-xl",
+                    )}
+                    title={language === "en" ? "End call" : "إنهاء المكالمة"}
+                  >
+                    <PhoneOff className="h-8 w-8 text-white" />
+                  </Button>
+                )}
               </div>
-              <div className="text-muted-foreground text-xs">
-                {recording
-                  ? `${language === "en" ? "Recording" : "جاري التسجيل"} ${formatTime(recordingTime)}`
-                  : pending
-                    ? language === "en"
-                      ? "Processing..."
-                      : "جاري المعالجة..."
-                    : ""}
-              </div>
-            </div>
 
-            <div className="flex items-center justify-center">
-              {!recording ? (
-                <Button
-                  onClick={startRecording}
-                  disabled={voicePending || permission === false || !isReady}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "shadow-lg hover:scale-105 hover:shadow-xl",
-                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
-                  )}
-                  title={language === "en" ? "Start recording" : "ابدأ التسجيل"}
-                  style={{
-                    background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
-                  }}
-                >
-                  <Mic className="h-8 w-8 text-white" />
-                </Button>
-              ) : (
-                <Button
-                  onClick={stopRecording}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
-                    "animate-pulse shadow-lg hover:shadow-xl",
-                  )}
-                  title={language === "en" ? "Stop recording" : "أوقف التسجيل"}
-                >
-                  <div className="h-6 w-6 rounded-sm bg-white" />
-                </Button>
+              {/* Call status and visual feedback */}
+              {isInCall && (
+                <div className="flex flex-col items-center gap-2">
+                  {/* Audio level visualizer */}
+                  <div className="flex items-center justify-center gap-1">
+                    {[...Array(10)].map((_, i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          "w-1 rounded-full transition-all duration-150 ease-out",
+                          audioLevel * 10 > i
+                            ? "h-8 bg-green-500 shadow-sm"
+                            : "h-2 bg-gray-300 dark:bg-gray-600",
+                        )}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Call state indicator */}
+                  <div
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium transition-all duration-300",
+                      callState === "speaking" &&
+                        "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
+                      callState === "listening" &&
+                        "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
+                      callState === "processing" &&
+                        "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
+                      callState === "connecting" &&
+                        "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300",
+                    )}
+                  >
+                    {getCallStateText()}
+                  </div>
+                </div>
               )}
-            </div>
 
-            {interimTranscript && (
-              <div className="text-muted-foreground mt-3 rounded p-2 text-sm">
-                <strong>
-                  {language === "en" ? "You (live): " : "أنت (مباشر): "}
-                </strong>
-                <span>{interimTranscript}</span>
+              <div className="text-center">
+                <p className="text-muted-foreground text-xs">
+                  {isInCall
+                    ? language === "en"
+                      ? "Speak naturally - I'll respond in real-time"
+                      : "تحدث بطبيعية - سأرد في الوقت الفعلي"
+                    : language === "en"
+                      ? "Tap to start a real-time voice conversation"
+                      : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
+                </p>
               </div>
-            )}
-
-            <div className="mt-3 text-center">
-              <p className="text-muted-foreground text-xs">
-                {recording
-                  ? language === "en"
-                    ? "Tap to stop recording"
-                    : "اضغط لإيقاف التسجيل"
-                  : language === "en"
-                    ? "Tap to record"
-                    : "اضغط للتسجيل"}
-              </p>
             </div>
           </>
         )}
