@@ -13,13 +13,13 @@ import {
   Mic,
   MicOff,
   Pause,
+  Phone,
+  PhoneOff,
   Play,
   Send,
   Trash2,
   Volume2,
   VolumeX,
-  Phone,
-  PhoneOff,
 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -33,14 +33,6 @@ type Msg = {
   isVoice?: boolean;
 };
 
-type CallState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "speaking"
-  | "listening"
-  | "processing";
-
 export default function WidgetFrame() {
   // Session state from parent
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -53,42 +45,35 @@ export default function WidgetFrame() {
   const [isTyping, setIsTyping] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
 
-  // Voice state
-  const [recording, setRecording] = useState(false);
-  const [voicePending, setVoicePending] = useState(false);
+  // Voice UI state
+  const [recording, setRecording] = useState(false); // indicates call active
+  const [voicePending, setVoicePending] = useState(false); // for non-realtime fallback if used
   const [permission, setPermission] = useState<boolean | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
-
-  // Real-time call state
-  const [callState, setCallState] = useState<CallState>("idle");
-  const [callSocket, setCallSocket] = useState<WebSocket | null>(null);
-  const [silenceTimeout, setSilenceTimeout] = useState<NodeJS.Timeout | null>(
-    null,
-  );
   const [audioLevel, setAudioLevel] = useState(0);
 
   // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
 
   // Refs
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const initializationRef = useRef<boolean>(false);
+  const recordingTimerRef = useRef<number | null>(null);
 
-  // Real-time call refs
-  const streamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  // WebRTC refs
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ephemeralSessionRef = useRef<any | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const microphoneRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const vadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const audioQueueRef = useRef<ArrayBuffer[]>([]);
-  const isPlayingResponseRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
   // Extract metadata values with fallbacks
   const primaryColor = metadata?.primaryColor || "#3b82f6"; // blue-500
@@ -137,6 +122,7 @@ export default function WidgetFrame() {
           kbId: data.kbId,
         });
 
+        // Validate the token is for our kbId (if we have one set)
         if (kbId && data.kbId !== kbId) {
           console.warn("Widget: INIT kbId mismatch", {
             expected: kbId,
@@ -149,6 +135,7 @@ export default function WidgetFrame() {
         setKbId(data.kbId ?? null);
         setMetadata(data.metadata ?? null);
 
+        // Set welcome message based on language
         const welcomeMsg: Msg = {
           id: `welcome-${Date.now()}`,
           role: "bot",
@@ -195,6 +182,7 @@ export default function WidgetFrame() {
       setKbId(urlKbId);
     }
 
+    // Send ready message after a brief delay to ensure parent is listening
     const timer = setTimeout(() => {
       notifyParentReady();
     }, 100);
@@ -221,7 +209,7 @@ export default function WidgetFrame() {
   useEffect(() => {
     if (recording) {
       setRecordingTime(0);
-      recordingTimerRef.current = setInterval(() => {
+      recordingTimerRef.current = window.setInterval(() => {
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } else {
@@ -242,15 +230,38 @@ export default function WidgetFrame() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      endCall();
-      if (vadTimeoutRef.current) {
-        clearTimeout(vadTimeoutRef.current);
-      }
-      if (silenceTimeout) {
-        clearTimeout(silenceTimeout);
+      stopCall();
+      if (
+        audioContextRef.current &&
+        audioContextRef.current.state !== "closed"
+      ) {
+        audioContextRef.current.close();
       }
     };
   }, []);
+
+  // Add this to your startCall function after creating audio context
+  useEffect(() => {
+    const debugAudio = async () => {
+      try {
+        const audioContext = audioContextRef.current;
+        if (audioContext) {
+          console.log("Audio context state:", audioContext.state);
+          if (audioContext.state === "suspended") {
+            console.log("Attempting to resume audio context...");
+            await audioContext.resume();
+            console.log("Audio context resumed:", audioContext.state);
+          }
+        }
+      } catch (err) {
+        console.error("Audio context error:", err);
+      }
+    };
+
+    if (recording) {
+      debugAudio();
+    }
+  }, [recording]);
 
   const checkMicrophonePermission = async () => {
     try {
@@ -273,305 +284,7 @@ export default function WidgetFrame() {
     );
   }, []);
 
-  // Real-time call functions
-  const startCall = async () => {
-    if (permission === false || !kbId) return;
-
-    try {
-      setCallState("connecting");
-
-      // Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 16000,
-        },
-      });
-
-      streamRef.current = stream;
-
-      // Set up audio analysis for VAD (Voice Activity Detection)
-      const audioContext = new (window.AudioContext ||
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (window as any).webkitAudioContext)({
-        sampleRate: 16000,
-      });
-      audioContextRef.current = audioContext;
-
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.8;
-      analyserRef.current = analyser;
-
-      const microphone = audioContext.createMediaStreamSource(stream);
-      microphoneRef.current = microphone;
-      microphone.connect(analyser);
-
-      // Connect to real-time WebSocket
-      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${wsProtocol}//${window.location.host}/api/realtime-call`;
-
-      const socket = new WebSocket(wsUrl);
-      setCallSocket(socket);
-
-      socket.onopen = () => {
-        console.log("Real-time call connected");
-        setCallState("connected");
-
-        // Send initialization
-        socket.send(
-          JSON.stringify({
-            type: "init",
-            kbId,
-            sessionToken,
-            conversationId,
-            voiceName,
-            language,
-          }),
-        );
-
-        startVoiceActivityDetection();
-      };
-
-      socket.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          switch (data.type) {
-            case "transcript":
-              if (data.text) {
-                const userMsg: Msg = {
-                  id: `u-${Date.now()}`,
-                  role: "user",
-                  text: data.text,
-                  createdAt: new Date().toISOString(),
-                  isVoice: true,
-                };
-                pushMessage(userMsg);
-              }
-              break;
-
-            case "response":
-              if (data.text) {
-                const botMsg: Msg = {
-                  id: `b-${Date.now()}`,
-                  role: "bot",
-                  text: data.text,
-                  createdAt: new Date().toISOString(),
-                  isVoice: true,
-                };
-                pushMessage(botMsg);
-              }
-
-              if (data.audio && audioEnabled) {
-                await playRealtimeAudio(data.audio);
-              }
-              break;
-
-            case "error":
-              console.error("Call error:", data.message);
-              const errorMsg: Msg = {
-                id: `err-${Date.now()}`,
-                role: "bot",
-                text:
-                  data.message ||
-                  (language === "en"
-                    ? "Call error occurred"
-                    : "حدث خطأ في المكالمة"),
-                createdAt: new Date().toISOString(),
-                isVoice: true,
-              };
-              pushMessage(errorMsg);
-              break;
-          }
-        } catch (err) {
-          console.error("Error parsing WebSocket message:", err);
-        }
-      };
-
-      socket.onerror = (error) => {
-        console.error("WebSocket error:", error);
-        setCallState("idle");
-      };
-
-      socket.onclose = () => {
-        console.log("WebSocket closed");
-        setCallState("idle");
-      };
-    } catch (error) {
-      console.error("Failed to start call:", error);
-      setCallState("idle");
-      setPermission(false);
-    }
-  };
-
-  const endCall = () => {
-    console.log("Ending call");
-
-    // Close WebSocket
-    if (callSocket) {
-      callSocket.close();
-      setCallSocket(null);
-    }
-
-    // Stop audio stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    // Clean up audio context
-    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-
-    // Clear timeouts
-    if (vadTimeoutRef.current) {
-      clearTimeout(vadTimeoutRef.current);
-      vadTimeoutRef.current = null;
-    }
-
-    if (silenceTimeout) {
-      clearTimeout(silenceTimeout);
-      setSilenceTimeout(null);
-    }
-
-    setCallState("idle");
-    setAudioLevel(0);
-    isPlayingResponseRef.current = false;
-  };
-
-  const startVoiceActivityDetection = () => {
-    if (!analyserRef.current || !callSocket) return;
-
-    const analyser = analyserRef.current;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const detectVoice = () => {
-      if (callState === "idle" || !analyser) return;
-
-      analyser.getByteFrequencyData(dataArray);
-
-      // Calculate average volume
-      const average =
-        dataArray.reduce((sum, value) => sum + value, 0) / bufferLength;
-      setAudioLevel(average / 255);
-
-      const threshold = 25; // Voice activity threshold
-      const isVoiceActive = average > threshold;
-
-      if (isVoiceActive && !isPlayingResponseRef.current) {
-        if (callState !== "speaking") {
-          setCallState("speaking");
-
-          // Clear any existing silence timeout
-          if (silenceTimeout) {
-            clearTimeout(silenceTimeout);
-            setSilenceTimeout(null);
-          }
-        }
-
-        // Send audio data to server
-        if (streamRef.current && callSocket?.readyState === WebSocket.OPEN) {
-          const mediaRecorder = new MediaRecorder(streamRef.current, {
-            mimeType: "audio/webm;codecs=opus",
-          });
-
-          mediaRecorder.start();
-
-          mediaRecorder.ondataavailable = (event) => {
-            if (
-              event.data.size > 0 &&
-              callSocket?.readyState === WebSocket.OPEN
-            ) {
-              const reader = new FileReader();
-              reader.onload = () => {
-                if (reader.result) {
-                  callSocket.send(
-                    JSON.stringify({
-                      type: "audio",
-                      data: reader.result,
-                    }),
-                  );
-                }
-              };
-              reader.readAsDataURL(event.data);
-            }
-          };
-
-          // Stop recording after a short interval
-          setTimeout(() => {
-            if (mediaRecorder.state === "recording") {
-              mediaRecorder.stop();
-            }
-          }, 500);
-        }
-      } else if (!isVoiceActive && callState === "speaking") {
-        // Start silence timeout
-        if (silenceTimeout) {
-          clearTimeout(silenceTimeout);
-        }
-
-        const timeout = setTimeout(() => {
-          if (!isPlayingResponseRef.current) {
-            setCallState("listening");
-          }
-        }, 1000); // 1 second of silence before switching to listening
-
-        setSilenceTimeout(timeout);
-      }
-
-      // Continue monitoring
-      vadTimeoutRef.current = setTimeout(detectVoice, 100);
-    };
-
-    detectVoice();
-  };
-
-  const playRealtimeAudio = async (audioData: string) => {
-    if (!audioEnabled || !audioContextRef.current) return;
-
-    try {
-      isPlayingResponseRef.current = true;
-      setCallState("processing");
-
-      // Convert base64 to array buffer
-      const binaryString = window.atob(audioData);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-
-      const audioBuffer = await audioContextRef.current.decodeAudioData(
-        bytes.buffer,
-      );
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContextRef.current.destination);
-
-      source.onended = () => {
-        isPlayingResponseRef.current = false;
-        if (callState !== "idle") {
-          setCallState("listening");
-        }
-      };
-
-      source.start();
-    } catch (error) {
-      console.error("Error playing realtime audio:", error);
-      isPlayingResponseRef.current = false;
-      if (callState !== "idle") {
-        setCallState("listening");
-      }
-    }
-  };
-
-  // Text chat functions
+  // ------------------ Text chat ------------------
   const sendTextMessage = async () => {
     const message = textInput.trim();
     if (!message || !kbId) {
@@ -613,9 +326,6 @@ export default function WidgetFrame() {
       });
 
       if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error("Authentication failed - token may be expired");
-        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -671,6 +381,7 @@ export default function WidgetFrame() {
           text,
           voice: voiceName,
           speed: 1.0,
+          kbId,
         }),
       });
 
@@ -689,10 +400,6 @@ export default function WidgetFrame() {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
-    }
-
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
     }
 
     const audio = new Audio(url);
@@ -727,17 +434,13 @@ export default function WidgetFrame() {
       currentAudioRef.current = null;
     }
 
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-
     setCurrentlyPlaying(null);
     setMessages((prev) => prev.map((msg) => ({ ...msg, isPlaying: false })));
   };
 
   const clearMessages = () => {
     stopAudio();
-    endCall();
+    stopCall();
     setMessages([]);
     setConversationId(null);
   };
@@ -755,31 +458,697 @@ export default function WidgetFrame() {
     }
   };
 
-  const getCallStateText = () => {
-    switch (callState) {
-      case "connecting":
-        return language === "en" ? "Connecting..." : "جاري الاتصال...";
-      case "connected":
-        return language === "en"
-          ? "Connected - Start speaking"
-          : "متصل - ابدأ الحديث";
-      case "speaking":
-        return language === "en" ? "Listening to you..." : "أستمع إليك...";
-      case "listening":
-        return language === "en" ? "Ready to listen" : "جاهز للاستماع";
-      case "processing":
-        return language === "en"
-          ? "Processing response..."
-          : "جاري معالجة الرد...";
-      default:
-        return language === "en" ? "Start voice call" : "بدء المكالمة الصوتية";
-    }
-  };
-
   const isRtl = language === "ar";
   const pending = isTyping || voicePending;
   const isReady = !!kbId;
-  const isInCall = callState !== "idle";
+
+  // ----------------------- WebRTC / Realtime helpers -----------------------
+
+  // Fetch ephemeral session from your server route /api/realtime/session
+  const fetchEphemeralSession = async () => {
+    console.log("Fetching ephemeral session with:", {
+      kbId,
+      voice: voiceName,
+      language,
+    });
+
+    const resp = await fetch("/api/realtime/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kbId, voice: voiceName, language }),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      console.error("Session creation failed:", {
+        status: resp.status,
+        body: txt,
+      });
+      throw new Error(
+        `Failed to create ephemeral session: ${resp.status} ${txt}`,
+      );
+    }
+
+    const json = await resp.json();
+    console.log("Session created successfully:", json);
+    ephemeralSessionRef.current = json;
+    return json;
+  };
+
+  // Wait for ICE gathering to finish (or timeout)
+  function waitForIceGatheringComplete(
+    pc: RTCPeerConnection,
+    timeoutMs = 10000,
+  ) {
+    return new Promise<void>((resolve) => {
+      if (pc.iceGatheringState === "complete") {
+        resolve();
+        return;
+      }
+
+      function handler() {
+        if (pc.iceGatheringState === "complete") {
+          pc.removeEventListener("icegatheringstatechange", handler);
+          clearTimer();
+          resolve();
+        }
+      }
+      pc.addEventListener("icegatheringstatechange", handler);
+
+      const timer = window.setTimeout(() => {
+        pc.removeEventListener("icegatheringstatechange", handler);
+        resolve(); // resolve anyway (trickle may still work)
+      }, timeoutMs);
+
+      function clearTimer() {
+        window.clearTimeout(timer);
+      }
+    });
+  }
+
+  function createPeerConnection() {
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+      ],
+    });
+
+    pc.onicecandidate = (ev) => {
+      console.debug("onicecandidate:", ev.candidate);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.debug("iceConnectionState:", pc.iceConnectionState);
+      if (
+        ["failed", "closed", "disconnected"].includes(pc.iceConnectionState)
+      ) {
+        console.warn("ICE failed => stopping call");
+        stopCall();
+      }
+    };
+
+    // Enhanced track handling with better debugging
+    pc.ontrack = (ev) => {
+      console.log("ontrack event:", {
+        streamCount: ev.streams.length,
+        trackKind: ev.track.kind,
+        trackReadyState: ev.track.readyState,
+        streamId: ev.streams[0]?.id,
+      });
+
+      const [remoteStream] = ev.streams;
+      if (!remoteStream) {
+        console.warn("No remote stream in track event");
+        return;
+      }
+
+      // Enhanced audio element setup
+      let audioEl = audioElRef.current;
+      if (!audioEl) {
+        audioEl = document.createElement("audio");
+        audioEl.autoplay = true;
+        audioEl.setAttribute("playsinline", "");
+        audioEl.volume = 1.0; // Ensure volume is at maximum
+        audioElRef.current = audioEl;
+
+        // Enhanced event listeners
+        audioEl.onloadstart = () => console.log("Audio load started");
+        audioEl.oncanplay = () => console.log("Audio can play");
+        audioEl.onplay = () => console.log("Audio started playing");
+        audioEl.onplaying = () => console.log("Audio is playing");
+        audioEl.onpause = () => console.log("Audio paused");
+        audioEl.onended = () => console.log("Audio ended");
+        audioEl.onwaiting = () => console.log("Audio waiting for data");
+        audioEl.onstalled = () => console.log("Audio stalled");
+        audioEl.onerror = (error) => {
+          console.error("Audio error:", error);
+          console.error("Audio error details:", audioEl?.error);
+        };
+        audioEl.onvolumechange = () => {
+          console.log("Audio volume changed to:", audioEl?.volume);
+        };
+      }
+
+      try {
+        // Check if stream has audio tracks
+        const audioTracks = remoteStream.getAudioTracks();
+        console.log("Remote stream audio tracks:", {
+          count: audioTracks.length,
+          tracks: audioTracks.map((track) => ({
+            id: track.id,
+            kind: track.kind,
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+          })),
+        });
+
+        if (audioTracks.length === 0) {
+          console.warn("No audio tracks in remote stream");
+          return;
+        }
+
+        audioEl.srcObject = remoteStream;
+
+        // Force play with user gesture handling
+        const playPromise = audioEl.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => {
+              console.log("Audio playing successfully");
+            })
+            .catch((err) => {
+              console.warn("Audio play failed:", err);
+              // Try to enable audio after user interaction
+              const enableAudio = () => {
+                console.log(
+                  "Attempting to enable audio after user interaction",
+                );
+                audioEl?.play().catch(console.warn);
+                document.removeEventListener("click", enableAudio);
+                document.removeEventListener("touchstart", enableAudio);
+              };
+              document.addEventListener("click", enableAudio);
+              document.addEventListener("touchstart", enableAudio);
+            });
+        }
+      } catch (err) {
+        console.error("Failed setting remote stream to audio element:", err);
+      }
+    };
+
+    return pc;
+  }
+
+  // Enhanced data channel message handling with better event processing
+  const setupDataChannel = (pc: RTCPeerConnection) => {
+    const dc = pc.createDataChannel("oai-events", {
+      ordered: true,
+    });
+    dataChannelRef.current = dc;
+
+    dc.onopen = () => {
+      console.debug("data channel open");
+      // Send initial configuration with KB-aware instructions
+      try {
+        dc.send(
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              instructions: `You are a helpful AI assistant with access to a knowledge base. When users ask questions, use the search_knowledge_base function to find relevant information before responding. Always ground your answers in the retrieved information and be conversational and natural.`,
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.5,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 500,
+                create_response: true,
+              },
+              tools: [
+                {
+                  type: "function",
+                  name: "search_knowledge_base",
+                  description:
+                    "Search the knowledge base for relevant information to answer the user's question",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      query: {
+                        type: "string",
+                        description:
+                          "The search query to find relevant information",
+                      },
+                    },
+                    required: ["query"],
+                  },
+                },
+              ],
+              tool_choice: "auto",
+            },
+          }),
+        );
+      } catch (err) {
+        console.warn("Failed to send initial session config:", err);
+      }
+    };
+
+    dc.onmessage = async (ev) => {
+      try {
+        const payload = JSON.parse(ev.data);
+        console.debug("data channel message:", payload);
+
+        // Handle different event types with KB integration
+        switch (payload.type) {
+          case "session.created":
+            console.log("Session created:", payload.session);
+            break;
+
+          case "session.updated":
+            console.log("Session updated:", payload.session);
+            break;
+
+          case "input_audio_buffer.speech_started":
+            console.log("User started speaking");
+            break;
+
+          case "input_audio_buffer.speech_stopped":
+            console.log("User stopped speaking");
+            break;
+
+          case "input_audio_buffer.committed":
+            console.log("Audio buffer committed");
+            break;
+
+          case "conversation.item.created":
+            console.log("Conversation item created:", payload.item);
+            // Check if this is a user message for potential KB search
+            if (
+              payload.item?.type === "message" &&
+              payload.item?.role === "user"
+            ) {
+              const userText = payload.item?.content?.[0]?.text;
+              if (userText) {
+                pushMessage({
+                  id: `user-${Date.now()}`,
+                  role: "user",
+                  text: userText,
+                  createdAt: new Date().toISOString(),
+                  isVoice: true,
+                });
+              }
+            }
+            break;
+
+          case "response.created":
+            console.log("Response created:", payload.response);
+            break;
+
+          case "response.output_item.added":
+            console.log("Response output item added:", payload.item);
+            break;
+
+          case "response.content_part.added":
+            console.log("Response content part added:", payload.part);
+            break;
+
+          case "response.function_call_delta":
+            console.log("Function call delta:", payload);
+            break;
+
+          case "response.function_call_done":
+            console.log("Function call done:", payload);
+            // Handle KB search function call
+            if (payload.name === "search_knowledge_base") {
+              try {
+                const searchArgs = JSON.parse(payload.arguments);
+                const searchQuery = searchArgs.query;
+
+                console.log("Performing KB search for:", searchQuery);
+
+                // Call our KB search API
+                const searchResponse = await fetch("/api/realtime/search", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    kbId,
+                    query: searchQuery,
+                    topK: 5,
+                  }),
+                });
+
+                const searchData = await searchResponse.json();
+
+                if (searchResponse.ok && searchData.success) {
+                  // Send the search results back to OpenAI
+                  const functionResult = {
+                    type: "conversation.item.create",
+                    item: {
+                      type: "function_call_output",
+                      call_id: payload.call_id,
+                      output: JSON.stringify({
+                        contextText: searchData.contextText,
+                        sources: searchData.sources,
+                        totalResults: searchData.totalResults,
+                      }),
+                    },
+                  };
+
+                  dc.send(JSON.stringify(functionResult));
+
+                  // Trigger response generation
+                  dc.send(JSON.stringify({ type: "response.create" }));
+                } else {
+                  // Send error result
+                  const errorResult = {
+                    type: "conversation.item.create",
+                    item: {
+                      type: "function_call_output",
+                      call_id: payload.call_id,
+                      output: JSON.stringify({
+                        error: "Failed to search knowledge base",
+                        contextText:
+                          "No information could be retrieved from the knowledge base.",
+                      }),
+                    },
+                  };
+                  dc.send(JSON.stringify(errorResult));
+                  dc.send(JSON.stringify({ type: "response.create" }));
+                }
+              } catch (searchError) {
+                console.error("KB search error:", searchError);
+                // Send error to OpenAI
+                const errorResult = {
+                  type: "conversation.item.create",
+                  item: {
+                    type: "function_call_output",
+                    call_id: payload.call_id,
+                    output: JSON.stringify({
+                      error: "Search failed",
+                      contextText:
+                        "Unable to search the knowledge base at this time.",
+                    }),
+                  },
+                };
+                dc.send(JSON.stringify(errorResult));
+                dc.send(JSON.stringify({ type: "response.create" }));
+              }
+            }
+            break;
+
+          case "response.audio_transcript.delta":
+            console.log("Audio transcript delta:", payload.delta);
+            break;
+
+          case "response.audio_transcript.done":
+            console.log("Audio transcript done:", payload.transcript);
+            if (payload.transcript) {
+              pushMessage({
+                id: `transcript-${Date.now()}`,
+                role: "bot",
+                text: payload.transcript,
+                createdAt: new Date().toISOString(),
+                isVoice: true,
+              });
+            }
+            break;
+
+          case "response.text.delta":
+            console.log("Text delta:", payload.delta);
+            break;
+
+          case "response.text.done":
+            console.log("Text done:", payload.text);
+            if (payload.text) {
+              pushMessage({
+                id: `text-${Date.now()}`,
+                role: "bot",
+                text: payload.text,
+                createdAt: new Date().toISOString(),
+                isVoice: true,
+              });
+            }
+            break;
+
+          case "response.audio.delta":
+            console.log(
+              "Audio delta received, length:",
+              payload.delta?.length || 0,
+            );
+            break;
+
+          case "response.audio.done":
+            console.log("Audio response completed");
+            break;
+
+          case "response.done":
+            console.log("Response completed:", payload.response);
+            break;
+
+          case "rate_limits.updated":
+            console.log("Rate limits updated:", payload.rate_limits);
+            break;
+
+          case "error":
+            console.error("Realtime API error:", payload);
+            pushMessage({
+              id: `error-${Date.now()}`,
+              role: "bot",
+              text:
+                language === "en"
+                  ? `Error: ${payload.error?.message || "Unknown error"}`
+                  : `خطأ: ${payload.error?.message || "خطأ غير معروف"}`,
+              createdAt: new Date().toISOString(),
+              isVoice: true,
+            });
+            break;
+
+          default:
+            console.debug("Unhandled event type:", payload.type, payload);
+        }
+      } catch {
+        console.debug("Non-JSON data channel message:", ev.data);
+      }
+    };
+
+    dc.onerror = (error) => {
+      console.error("Data channel error:", error);
+    };
+
+    dc.onclose = () => {
+      console.debug("Data channel closed");
+    };
+
+    return dc;
+  };
+
+  // Start a continuous call to OpenAI Realtime (WebRTC -> OpenAI)
+  const startCall = async () => {
+    if (!kbId) {
+      console.warn("No kbId set; cannot start call");
+      return;
+    }
+    if (pcRef.current) {
+      console.warn("Call already running");
+      return;
+    }
+
+    try {
+      setVoicePending(true);
+
+      // 1) Create ephemeral session with kbId context
+      console.log("Creating ephemeral session...");
+      const session = await fetchEphemeralSession();
+      const ephemeralToken =
+        session?.client_secret?.value ?? session?.client_secret;
+
+      if (!ephemeralToken) {
+        throw new Error("Ephemeral token missing in session response");
+      }
+
+      console.log("Ephemeral session created:", {
+        id: session.id,
+        model: session.model,
+        expires_at: session.expires_at,
+      });
+
+      // 2) Get audio stream with better constraints
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 24000, // OpenAI prefers 24kHz
+          channelCount: 1,
+        },
+      });
+      localStreamRef.current = stream;
+
+      // Setup audio monitoring
+      const ac = new (window.AudioContext ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).webkitAudioContext)();
+      audioContextRef.current = ac;
+      const analyser = ac.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.3;
+      analyserRef.current = analyser;
+      const source = ac.createMediaStreamSource(stream);
+      micSourceRef.current = source;
+      source.connect(analyser);
+
+      // Audio level animation
+      const updateLevel = () => {
+        if (!analyserRef.current) return;
+        const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(data);
+        const avg = data.reduce((s, v) => s + v, 0) / data.length;
+        setAudioLevel(avg / 255);
+        if (recording) {
+          requestAnimationFrame(updateLevel);
+        }
+      };
+      updateLevel();
+
+      // 3) Create peer connection
+      const pc = createPeerConnection();
+      pcRef.current = pc;
+
+      // Add tracks
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      // Setup data channel with enhanced handling
+      setupDataChannel(pc);
+
+      // 4) Create and set offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // 5) Wait for ICE gathering
+      console.log("Waiting for ICE gathering...");
+      await waitForIceGatheringComplete(pc, 10000); // Longer timeout
+
+      const finalOffer = pc.localDescription?.sdp;
+      if (!finalOffer) {
+        throw new Error("No SDP offer available after ICE gathering");
+      }
+
+      // 6) Send to OpenAI
+      const modelName = session.model || "gpt-4o-mini-realtime";
+      const realtimeUrl = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(modelName)}`;
+
+      console.log("Sending offer to OpenAI Realtime API...");
+      const resp = await fetch(realtimeUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ephemeralToken}`,
+          "Content-Type": "application/sdp",
+        },
+        body: finalOffer,
+      });
+
+      if (!resp.ok) {
+        const errorText = await resp.text().catch(() => "");
+        console.error("OpenAI Realtime API error:", {
+          status: resp.status,
+          statusText: resp.statusText,
+          body: errorText,
+        });
+        throw new Error(
+          `Realtime SDP exchange failed: ${resp.status} - ${errorText}`,
+        );
+      }
+
+      const answerSdp = await resp.text();
+      if (!answerSdp) {
+        throw new Error("No SDP answer returned from realtime endpoint");
+      }
+
+      console.log("Received SDP answer, setting remote description...");
+      await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+
+      // Mark as recording
+      setRecording(true);
+
+      pushMessage({
+        id: `session-start-${Date.now()}`,
+        role: "bot",
+        text:
+          language === "en"
+            ? "Voice session started. You can speak now!"
+            : "تم بدء الجلسة الصوتية. يمكنك التحدث الآن!",
+        createdAt: new Date().toISOString(),
+        isVoice: true,
+      });
+
+      console.log("WebRTC call established successfully");
+    } catch (err) {
+      console.error("startCall error:", err);
+      pushMessage({
+        id: `error-${Date.now()}`,
+        role: "bot",
+        text:
+          language === "en"
+            ? `Failed to start voice session: ${err instanceof Error ? err.message : String(err)}`
+            : `فشل بدء الجلسة الصوتية: ${err instanceof Error ? err.message : String(err)}`,
+        createdAt: new Date().toISOString(),
+        isVoice: true,
+      });
+      stopCall();
+    } finally {
+      setVoicePending(false);
+    }
+  };
+
+  // Stop call and cleanup
+  const stopCall = () => {
+    setRecording(false);
+    setAudioLevel(0);
+
+    try {
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((t) => t.stop());
+        localStreamRef.current = null;
+      }
+    } catch (e) {
+      console.warn("Error stopping local stream:", e);
+    }
+
+    try {
+      if (pcRef.current) {
+        pcRef.current.getSenders().forEach((s) => {
+          try {
+            if (s.track) s.track.stop();
+          } catch {}
+        });
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+    } catch (e) {
+      console.warn("Error closing PeerConnection:", e);
+    }
+
+    try {
+      if (audioElRef.current) {
+        audioElRef.current.pause();
+        audioElRef.current.srcObject = null;
+        audioElRef.current = null;
+      }
+    } catch {}
+
+    try {
+      if (dataChannelRef.current) {
+        try {
+          dataChannelRef.current.close();
+        } catch {}
+        dataChannelRef.current = null;
+      }
+    } catch {}
+
+    try {
+      if (
+        audioContextRef.current &&
+        audioContextRef.current.state !== "closed"
+      ) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      analyserRef.current = null;
+      micSourceRef.current = null;
+    } catch (e) {
+      console.warn("Error cleaning audio context:", e);
+    }
+
+    ephemeralSessionRef.current = null;
+  };
+
+  // ----------------------- UI helpers / rendering -----------------------
+
+  const isInCall = recording;
+  const pendingStatus = isTyping || voicePending;
 
   return (
     <div
@@ -825,8 +1194,10 @@ export default function WidgetFrame() {
             </h3>
             <p className="text-muted-foreground text-xs">
               {isInCall
-                ? getCallStateText()
-                : pending
+                ? language === "en"
+                  ? `In call • ${formatTime(recordingTime)}`
+                  : `في المكالمة • ${formatTime(recordingTime)}`
+                : pendingStatus
                   ? language === "en"
                     ? "Processing..."
                     : "جاري المعالجة..."
@@ -841,16 +1212,12 @@ export default function WidgetFrame() {
               variant={mode === "text" ? "default" : "ghost"}
               size="sm"
               onClick={() => {
-                if (isInCall) endCall();
+                if (isInCall) stopCall();
                 setMode("text");
               }}
               disabled={!isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 ease-out hover:text-white! ${mode === "text" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
-              style={
-                {
-                  "--primary": primaryColor,
-                } as React.CSSProperties
-              }
+              style={{ "--primary": primaryColor } as React.CSSProperties}
             >
               {language === "en" ? "Text" : "نص"}
             </Button>
@@ -858,17 +1225,11 @@ export default function WidgetFrame() {
               variant={mode === "voice" ? "default" : "ghost"}
               size="sm"
               onClick={() => {
-                if (permission !== false) {
-                  setMode("voice");
-                }
+                if (permission !== false) setMode("voice");
               }}
               disabled={permission === false || !isReady}
               className={`h-7 px-3 text-xs text-white transition-all duration-300 hover:text-white! ${mode === "voice" ? "bg-[var(--primary)]" : "hover:bg-transparent!"}`}
-              style={
-                {
-                  "--primary": primaryColor,
-                } as React.CSSProperties
-              }
+              style={{ "--primary": primaryColor } as React.CSSProperties}
             >
               {language === "en" ? "Voice" : "صوتي"}
             </Button>
@@ -889,11 +1250,7 @@ export default function WidgetFrame() {
                   ? "Enable audio"
                   : "تمكين الصوت"
             }
-            style={
-              {
-                "--primary": primaryColor,
-              } as React.CSSProperties
-            }
+            style={{ "--primary": primaryColor } as React.CSSProperties}
           >
             {audioEnabled ? (
               <Volume2 className="h-4 w-4" />
@@ -910,11 +1267,7 @@ export default function WidgetFrame() {
               disabled={!isReady}
               className="h-8 w-8 hover:bg-[var(--primary)]! hover:text-white!"
               title={language === "en" ? "Clear messages" : "مسح الرسائل"}
-              style={
-                {
-                  "--primary": primaryColor,
-                } as React.CSSProperties
-              }
+              style={{ "--primary": primaryColor } as React.CSSProperties}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -927,20 +1280,13 @@ export default function WidgetFrame() {
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">
             <div
-              className={cn(
-                "flex h-16 w-16 items-center justify-center rounded-full transition-all duration-300",
-                isInCall && "animate-pulse",
-              )}
+              className="flex h-16 w-16 items-center justify-center rounded-full"
               style={{
                 background: `linear-gradient(to bottom right, ${hexToRgba(primaryColor, 0.2)}, ${hexToRgba(accentColor, 0.12)})`,
               }}
             >
               {mode === "voice" ? (
-                isInCall ? (
-                  <Phone className="h-8 w-8" style={{ color: primaryColor }} />
-                ) : (
-                  <Mic className="h-8 w-8" style={{ color: primaryColor }} />
-                )
+                <Mic className="h-8 w-8" style={{ color: primaryColor }} />
               ) : (
                 <MessageSquare
                   className="h-8 w-8"
@@ -950,32 +1296,25 @@ export default function WidgetFrame() {
             </div>
             <div>
               <p className="text-sm font-medium">
-                {isInCall
-                  ? getCallStateText()
-                  : mode === "voice"
-                    ? language === "en"
-                      ? "Start a voice conversation"
-                      : "ابدأ محادثة صوتية"
-                    : language === "en"
-                      ? "Start a conversation"
-                      : "ابدأ محادثة"}
+                {mode === "voice"
+                  ? language === "en"
+                    ? "Start a voice conversation"
+                    : "ابدأ محادثة صوتية"
+                  : language === "en"
+                    ? "Start a conversation"
+                    : "ابدأ محادثة"}
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
-                {isInCall
+                {mode === "voice"
                   ? language === "en"
-                    ? "Speak naturally - I'll respond in real-time"
-                    : "تحدث بطبيعية - سأرد في الوقت الفعلي"
-                  : mode === "voice"
-                    ? language === "en"
-                      ? "Click the call button to start"
-                      : "اضغط على زر المكالمة للبدء"
-                    : language === "en"
-                      ? "Type a message or switch to voice mode"
-                      : "اكتب رسالة أو قم بالتبديل إلى الوضع الصوتي"}
+                    ? "Click the call button to start"
+                    : "اضغط على زر المكالمة للبدء"
+                  : language === "en"
+                    ? "Type a message or switch to voice mode"
+                    : "اكتب رسالة أو قم بالتبديل إلى الوضع الصوتي"}
               </p>
             </div>
 
-            {/* Voice level indicator for active call */}
             {isInCall && (
               <div className="mt-4 flex items-center gap-2">
                 <div className="flex items-center gap-1">
@@ -983,22 +1322,16 @@ export default function WidgetFrame() {
                     <div
                       key={i}
                       className={cn(
-                        "h-1 w-1 rounded-full transition-all duration-150",
+                        "h-2 w-3 rounded-md transition-all",
                         audioLevel * 5 > i
-                          ? "scale-125 bg-green-500"
-                          : "bg-gray-300 dark:bg-gray-600",
+                          ? "scale-y-110 bg-green-500"
+                          : "bg-gray-300",
                       )}
                     />
                   ))}
                 </div>
                 <span className="text-muted-foreground text-xs">
-                  {callState === "speaking"
-                    ? language === "en"
-                      ? "Speaking"
-                      : "يتحدث"
-                    : language === "en"
-                      ? "Listening"
-                      : "يستمع"}
+                  {language === "en" ? "In call" : "في المكالمة"}
                 </span>
               </div>
             )}
@@ -1051,7 +1384,6 @@ export default function WidgetFrame() {
                 >
                   <div className="whitespace-pre-wrap">{msg.text}</div>
 
-                  {/* Voice indicator */}
                   {msg.isVoice && (
                     <div className="absolute -top-2 -right-2">
                       <div
@@ -1131,7 +1463,7 @@ export default function WidgetFrame() {
           ))
         )}
 
-        {pending && (
+        {pendingStatus && (
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-gray-100 px-4 py-3 dark:bg-gray-800">
               <div className="flex items-center gap-2">
@@ -1158,18 +1490,18 @@ export default function WidgetFrame() {
                 placeholder={
                   language === "en" ? "Type your message..." : "اكتب رسالتك..."
                 }
-                disabled={pending || !isReady}
+                disabled={pendingStatus || !isReady}
                 className="focus-visible:border-[var(--primary)] focus-visible:ring-[3px] focus-visible:ring-[var(--primary)]/50"
                 style={{ "--primary": primaryColor } as React.CSSProperties}
               />
             </div>
             <Button
               onClick={sendTextMessage}
-              disabled={!textInput.trim() || pending || !isReady}
+              disabled={!textInput.trim() || pendingStatus || !isReady}
               style={{ background: primaryColor }}
               className="text-white"
             >
-              {pending ? <Spinner /> : <Send className="h-4 w-4" />}
+              {pendingStatus ? <Spinner /> : <Send className="h-4 w-4" />}
             </Button>
           </div>
         ) : (
@@ -1187,92 +1519,52 @@ export default function WidgetFrame() {
               </div>
             )}
 
-            <div className="flex flex-col items-center gap-4">
-              {/* Real-time call controls */}
-              <div className="flex items-center justify-center">
-                {!isInCall ? (
-                  <Button
-                    onClick={startCall}
-                    disabled={permission === false || !isReady}
-                    className={cn(
-                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                      "shadow-lg hover:scale-105 hover:shadow-xl",
-                      "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
-                    )}
-                    title={
-                      language === "en"
-                        ? "Start voice call"
-                        : "ابدأ المكالمة الصوتية"
-                    }
-                    style={{
-                      background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
-                    }}
-                  >
-                    <Phone className="h-8 w-8 text-white" />
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={endCall}
-                    className={cn(
-                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                      "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
-                      "shadow-lg hover:shadow-xl",
-                    )}
-                    title={language === "en" ? "End call" : "إنهاء المكالمة"}
-                  >
-                    <PhoneOff className="h-8 w-8 text-white" />
-                  </Button>
-                )}
-              </div>
-
-              {/* Call status and visual feedback */}
-              {isInCall && (
-                <div className="flex flex-col items-center gap-2">
-                  {/* Audio level visualizer */}
-                  <div className="flex items-center justify-center gap-1">
-                    {[...Array(10)].map((_, i) => (
-                      <div
-                        key={i}
-                        className={cn(
-                          "w-1 rounded-full transition-all duration-150 ease-out",
-                          audioLevel * 10 > i
-                            ? "h-8 bg-green-500 shadow-sm"
-                            : "h-2 bg-gray-300 dark:bg-gray-600",
-                        )}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Call state indicator */}
-                  <div
-                    className={cn(
-                      "rounded-full px-3 py-1 text-xs font-medium transition-all duration-300",
-                      callState === "speaking" &&
-                        "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300",
-                      callState === "listening" &&
-                        "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300",
-                      callState === "processing" &&
-                        "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
-                      callState === "connecting" &&
-                        "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300",
-                    )}
-                  >
-                    {getCallStateText()}
-                  </div>
-                </div>
+            <div className="flex items-center justify-center">
+              {!isInCall ? (
+                <Button
+                  onClick={startCall}
+                  disabled={voicePending || permission === false || !isReady}
+                  className={cn(
+                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                    "shadow-lg hover:scale-105 hover:shadow-xl",
+                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+                  )}
+                  title={
+                    language === "en"
+                      ? "Start voice call"
+                      : "ابدأ المكالمة الصوتية"
+                  }
+                  style={{
+                    background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
+                  }}
+                >
+                  <Phone className="h-8 w-8 text-white" />
+                </Button>
+              ) : (
+                <Button
+                  onClick={stopCall}
+                  className={cn(
+                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                    "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
+                    "shadow-lg hover:shadow-xl",
+                  )}
+                  title={language === "en" ? "End call" : "إنهاء المكالمة"}
+                >
+                  <PhoneOff className="h-8 w-8 text-white" />
+                </Button>
               )}
+            </div>
 
-              <div className="text-center">
-                <p className="text-muted-foreground text-xs">
-                  {isInCall
-                    ? language === "en"
-                      ? "Speak naturally - I'll respond in real-time"
-                      : "تحدث بطبيعية - سأرد في الوقت الفعلي"
-                    : language === "en"
-                      ? "Tap to start a real-time voice conversation"
-                      : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
-                </p>
-              </div>
+            <div className="mt-3 text-center">
+              <p className="text-muted-foreground text-xs">
+                {isInCall
+                  ? language === "en"
+                    ? "Speak naturally — the assistant will reply automatically"
+                    : "تحدث بطبيعية — سيقوم المساعد بالرد تلقائيًا"
+                  : language === "en"
+                    ? "Tap to start a real-time voice conversation"
+                    : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
+              </p>
             </div>
           </>
         )}
