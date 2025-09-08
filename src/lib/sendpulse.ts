@@ -20,16 +20,14 @@ async function getAccessToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  const body = {
-    grant_type: "client_credentials",
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-  };
-
   const res = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+    }),
   });
 
   if (!res.ok) {
@@ -38,9 +36,8 @@ async function getAccessToken(): Promise<string> {
   }
 
   const json = await res.json();
-  // json should contain access_token and expires_in (seconds)
-  const accessToken = json?.access_token;
-  const expiresIn = json?.expires_in ?? 3600;
+  const accessToken = json.access_token;
+  const expiresIn = json.expires_in ?? 3600;
 
   if (!accessToken) throw new Error("SendPulse returned no access_token");
 

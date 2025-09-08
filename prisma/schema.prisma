@@ -183,7 +183,7 @@ model Bot {
 model KnowledgeBase {
   id          String      @id @default(auto()) @map("_id") @db.ObjectId
   userId      String      @db.ObjectId
-  botId       String?     @db.ObjectId
+  botId       String     @db.ObjectId
   title       String
   description String?
   documents   Document[]
@@ -425,6 +425,7 @@ model VoiceProfile {
  */
 model Usage {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId      String?  @unique
   botId        String?  @db.ObjectId
   userId       String?  @db.ObjectId
   date         DateTime
@@ -432,13 +433,31 @@ model Usage {
   minutes      Int
   meta         Json?
   createdAt    DateTime @default(now())
+  User         User?    @relation(fields: [userId], references: [id])
+  Bot          Bot?     @relation(fields: [botId], references: [id])
 
-  bot  Bot?  @relation(fields: [botId], references: [id], onDelete: SetNull)
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  @@index([userId, date])
+  @@index([botId, date])
+}
 
-  @@index([botId])
-  @@index([userId])
-  @@index([date])
+model AggregatedUsage {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @db.ObjectId
+  botId             String?  @db.ObjectId
+  day               String // YYYY-MM-DD
+  interactions      Int      @default(0)
+  minutes           Int      @default(0)
+  website           Int      @default(0)
+  whatsapp          Int      @default(0)
+  facebook          Int      @default(0)
+  voice             Int      @default(0)
+  correctResponses  Int      @default(0) // thumbs-up or inferred correct
+  negativeResponses Int      @default(0) // thumbs-down
+  fallbackCount     Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, botId, day], name: "userId_botId_day")
+  @@index([day])
 }
 
 /**

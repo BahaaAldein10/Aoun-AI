@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const runtime = "nodejs";
 
+import { logInteraction } from "@/lib/analytics/logInteraction";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextResponse } from "next/server";
@@ -71,86 +72,6 @@ export async function POST(req: Request) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const cache = CacheService.getInstance();
-
-  // Usage logging helper (same logic, but using dynamic prisma above)
-  async function logUsageAtomic(opts: {
-    userId?: string | null;
-    botId?: string | null;
-    kbId: string;
-    conversationId?: string | null;
-    cached: boolean;
-    promptSize: number;
-    retrievedCount: number;
-    minutes?: number;
-    extraMeta?: Record<string, any>;
-  }) {
-    const {
-      userId,
-      botId,
-      kbId,
-      conversationId,
-      cached,
-      promptSize,
-      retrievedCount,
-      minutes = 0,
-      extraMeta,
-    } = opts;
-
-    try {
-      const hasSelector = Boolean(userId || botId);
-      if (hasSelector) {
-        const where: Record<string, any> = {};
-        if (userId) where.userId = userId;
-        if (botId) where.botId = botId;
-
-        const updateRes = await prisma.usage.updateMany({
-          where,
-          data: {
-            interactions: { increment: 1 },
-            minutes: { increment: minutes },
-            date: new Date(),
-            meta: {
-              set: {
-                ...(extraMeta ?? {}),
-                kbId,
-                conversationId: conversationId ?? null,
-                cached,
-                promptSize,
-                retrievedCount,
-                lastSeenAt: new Date().toISOString(),
-              },
-            },
-          },
-        });
-
-        if ((updateRes?.count ?? 0) > 0) {
-          return;
-        }
-      }
-
-      // fallback create
-      await prisma.usage.create({
-        data: {
-          userId: userId ?? null,
-          botId: botId ?? null,
-          date: new Date(),
-          interactions: 1,
-          minutes: minutes,
-          meta: {
-            kbId,
-            conversationId: conversationId ?? null,
-            cached,
-            promptSize,
-            retrievedCount,
-            ...(extraMeta ?? {}),
-            createdAt: new Date().toISOString(),
-          },
-        },
-      });
-    } catch (err) {
-      console.warn("Failed to write usage log (atomic):", err);
-    }
-  }
 
   try {
     const body = (await req.json().catch(() => ({}))) as ChatRequestBody;
@@ -309,16 +230,61 @@ export async function POST(req: Request) {
 
     if (cachedResponse) {
       const minutes = estimateMinutesFromText(message);
-      void logUsageAtomic({
-        userId: kbData.userId,
-        botId: kbData.botId,
-        kbId,
-        conversationId: conversationId ?? null,
-        cached: true,
-        promptSize: message.length,
-        retrievedCount: cachedResponse.sources?.length ?? 0,
-        minutes,
-      });
+
+      // create an eventId for this request
+      const eventId = crypto.randomUUID();
+
+      // 1) Log to aggregated analytics + create minimal usage row via your helper
+      try {
+        await logInteraction({
+          userId: kbData.userId,
+          botId: kbData.botId,
+          channel: "website",
+          interactions: 1,
+          minutes,
+          eventId,
+        });
+      } catch (err) {
+        console.warn("logInteraction failed (cached path):", err);
+      }
+
+      // 2) Upsert the usage row to attach richer meta (promptSize, retrievedCount, cached flag, conversationId)
+      try {
+        await prisma.usage.upsert({
+          where: { eventId },
+          create: {
+            eventId,
+            userId: kbData.userId ?? null,
+            botId: kbData.botId ?? null,
+            date: new Date(),
+            interactions: 1,
+            minutes,
+            meta: {
+              kbId,
+              conversationId: conversationId ?? null,
+              cached: true,
+              promptSize: message.length,
+              retrievedCount: cachedResponse.sources?.length ?? 0,
+              createdAt: new Date().toISOString(),
+            },
+          },
+          update: {
+            date: new Date(),
+            meta: {
+              set: {
+                kbId,
+                conversationId: conversationId ?? null,
+                cached: true,
+                promptSize: message.length,
+                retrievedCount: cachedResponse.sources?.length ?? 0,
+                lastSeenAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      } catch (err) {
+        console.warn("usage upsert failed (cached path):", err);
+      }
 
       return NextResponse.json({
         success: true,
@@ -470,18 +436,63 @@ export async function POST(req: Request) {
 
     await cache.setChatResponse(kbId, messageHash, responseData);
 
-    // Usage logging
+    // ---------------------------
+    // Usage logging (new flow)
+    // ---------------------------
     const chatMinutes = estimateMinutesFromText(prompt, 200);
-    void logUsageAtomic({
-      userId: kbData.userId,
-      botId: kbData.botId,
-      kbId,
-      conversationId: conversationId ?? null,
-      cached: false,
-      promptSize: prompt.length,
-      retrievedCount: retrieved.length,
-      minutes: chatMinutes,
-    });
+    const eventId = crypto.randomUUID();
+
+    // 1) call your analytics helper to update aggregatedUsage and create the minimal usage audit row
+    try {
+      await logInteraction({
+        userId: kbData.userId,
+        botId: kbData.botId,
+        channel: "website",
+        interactions: 1,
+        minutes: chatMinutes,
+        eventId,
+      });
+    } catch (err) {
+      console.warn("logInteraction failed (llm path):", err);
+    }
+
+    // 2) upsert the usage row to ensure the richer meta is persisted
+    try {
+      await prisma.usage.upsert({
+        where: { eventId },
+        create: {
+          eventId,
+          userId: kbData.userId ?? null,
+          botId: kbData.botId ?? null,
+          date: new Date(),
+          interactions: 1,
+          minutes: chatMinutes,
+          meta: {
+            kbId,
+            conversationId: conversationId ?? null,
+            cached: false,
+            promptSize: prompt.length,
+            retrievedCount: retrieved.length,
+            createdAt: new Date().toISOString(),
+          },
+        },
+        update: {
+          date: new Date(),
+          meta: {
+            set: {
+              kbId,
+              conversationId: conversationId ?? null,
+              cached: false,
+              promptSize: prompt.length,
+              retrievedCount: retrieved.length,
+              lastSeenAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+    } catch (err) {
+      console.warn("usage upsert failed (llm path):", err);
+    }
 
     // Return
     return NextResponse.json({

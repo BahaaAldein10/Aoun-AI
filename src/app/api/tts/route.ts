@@ -3,6 +3,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
+import { logInteraction } from "@/lib/analytics/logInteraction"; // analytics helper
+import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
@@ -13,6 +16,14 @@ function sha256Buffer(input: string) {
 }
 
 const VALID_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+
+/** estimate minutes from text (used for billing/analytics) */
+function estimateMinutesFromText(text?: string | null, wpm = 150) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return 0;
+  return Math.max(1, Math.ceil(words / wpm));
+}
 
 // NOTE: keep lightweight constants at top-level only (no client initialization)
 
@@ -108,81 +119,92 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // If widget token present + kbId, validate token KB match + allowed origin if metadata exists
+    // Load KB metadata so we can validate API key / widget origin
+    let kbData;
+    if (!kbData) {
+      const kb = await prisma.knowledgeBase.findUnique({
+        where: { id: kbId },
+        select: { id: true, userId: true, botId: true, metadata: true },
+      });
+
+      if (!kb) {
+        return NextResponse.json(
+          { error: "Knowledge base not found" },
+          { status: 404 },
+        );
+      }
+
+      kbData = {
+        id: kb.id,
+        userId: kb.userId,
+        botId: kb.botId ?? null,
+        metadata: kb.metadata as unknown as KbMetadata & {
+          apiKeyHash?: string;
+        },
+      };
+    }
+
+    const metadata = kbData.metadata;
+
+    // Auth checks (widget vs API key)
     if (widgetPayload) {
-      if (kbId && widgetPayload.kbId !== kbId) {
+      if (widgetPayload.kbId !== kbId) {
         return NextResponse.json(
           { error: "KB ID mismatch in widget token" },
           { status: 403 },
         );
       }
 
-      if (kbId) {
-        const kbData = await cache.getKbMetadata(kbId);
-        if (kbData) {
-          const metadata = kbData.metadata ?? {};
-          const allowedOrigins = Array.isArray(metadata.allowedOrigins)
-            ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
-            : [];
-          if (
-            widgetPayload.origin &&
-            allowedOrigins.length > 0 &&
-            !allowedOrigins.includes(widgetPayload.origin)
-          ) {
-            return NextResponse.json(
-              { error: "Origin not allowed for widget token" },
-              { status: 403 },
-            );
-          }
-        } else {
-          console.warn(
-            `KB metadata not found (kbId=${kbId}) while validating widget token`,
+      const allowedOrigins = Array.isArray(metadata.allowedOrigins)
+        ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
+        : [];
+
+      if (widgetPayload.origin) {
+        if (
+          allowedOrigins.length > 0 &&
+          !allowedOrigins.includes(widgetPayload.origin)
+        ) {
+          return NextResponse.json(
+            { error: "Origin not allowed for widget token" },
+            { status: 403 },
           );
         }
-      }
-    } else if (kbId) {
-      // if kbId provided and no widget token: require API key or hash from KB metadata
-      const kbData = await cache.getKbMetadata(kbId);
-      if (!kbData)
+      } else {
         return NextResponse.json(
-          { error: "Knowledge base not found" },
-          { status: 404 },
+          { error: "Invalid widget token (missing origin)" },
+          { status: 403 },
         );
-
-      const metadata = kbData.metadata ?? {};
+      }
+    } else {
       const storedHash =
         typeof metadata.apiKeyHash === "string"
           ? metadata.apiKeyHash
           : undefined;
-      const storedPlain =
-        typeof metadata.apiKey === "string" ? metadata.apiKey : undefined;
 
-      if (storedHash || storedPlain) {
-        if (!authHeader)
+      if (!authHeader) {
+        return NextResponse.json(
+          { error: "Unauthorized (missing API key or widget token)" },
+          { status: 401 },
+        );
+      }
+
+      if (storedHash) {
+        const incomingBuf = sha256Buffer(authHeader);
+        const storedBuf = Buffer.from(storedHash, "hex");
+        if (
+          incomingBuf.length !== storedBuf.length ||
+          !crypto.timingSafeEqual(incomingBuf, storedBuf)
+        ) {
           return NextResponse.json(
-            { error: "Unauthorized (missing API key)" },
+            { error: "Unauthorized (invalid API key)" },
             { status: 401 },
           );
-
-        if (storedHash) {
-          const incoming = sha256Buffer(authHeader);
-          const stored = Buffer.from(storedHash, "hex");
-          if (
-            incoming.length !== stored.length ||
-            !crypto.timingSafeEqual(incoming, stored)
-          ) {
-            return NextResponse.json(
-              { error: "Unauthorized (invalid API key)" },
-              { status: 401 },
-            );
-          }
-        } else {
-          if (authHeader !== storedPlain)
-            return NextResponse.json(
-              { error: "Unauthorized (invalid API key - legacy)" },
-              { status: 401 },
-            );
         }
+      } else {
+        return NextResponse.json(
+          { error: "Knowledge base is private; API key required" },
+          { status: 401 },
+        );
       }
     }
 
@@ -192,6 +214,64 @@ export async function POST(request: NextRequest) {
     const cached = await cache.getTtsAudio(ttsHash, voice);
 
     if (cached) {
+      // If kbId present, record analytics (non-blocking) — eventId used for idempotency
+      if (kbId && kbData) {
+        const eventId = crypto.randomUUID();
+        const minutes = estimateMinutesFromText(text);
+        try {
+          await logInteraction({
+            userId: kbData.userId,
+            botId: kbData.botId ?? null,
+            channel: "voice",
+            interactions: 1,
+            minutes,
+            eventId,
+          });
+        } catch (e) {
+          console.warn("logInteraction failed (tts cached):", e);
+        }
+
+        // upsert usage row with richer meta (best-effort, non-fatal)
+        try {
+          await prisma.usage.upsert({
+            where: { eventId },
+            create: {
+              eventId,
+              userId: kbData.userId ?? null,
+              botId: kbData.botId ?? null,
+              date: new Date(),
+              interactions: 1,
+              minutes,
+              meta: {
+                kbId,
+                textLength: text.length,
+                voice,
+                speed,
+                cached: true,
+                audioSize: cached?.length ?? 0, // best-effort
+                createdAt: new Date().toISOString(),
+              },
+            },
+            update: {
+              date: new Date(),
+              meta: {
+                set: {
+                  kbId,
+                  textLength: text.length,
+                  voice,
+                  speed,
+                  cached: true,
+                  audioSize: cached?.length ?? 0,
+                  lastSeenAt: new Date().toISOString(),
+                },
+              },
+            },
+          });
+        } catch (e) {
+          console.warn("usage upsert failed (tts cached):", e);
+        }
+      }
+
       return NextResponse.json({
         audioUrl: cached,
         voice,
@@ -264,7 +344,69 @@ export async function POST(request: NextRequest) {
     const audioUrl = `data:audio/mp3;base64,${base64}`;
 
     // cache audio (be mindful of blob sizes)
-    await cache.setTtsAudio(ttsHash, voice, audioUrl);
+    try {
+      await cache.setTtsAudio(ttsHash, voice, audioUrl);
+    } catch (e) {
+      console.warn("Failed to cache TTS audio (non-fatal):", e);
+    }
+
+    // Analytics: if kbId present and we have kbData, log interaction + upsert usage row
+    if (kbId && kbData) {
+      const eventId = crypto.randomUUID();
+      const minutes = estimateMinutesFromText(text);
+
+      try {
+        await logInteraction({
+          userId: kbData.userId,
+          botId: kbData.botId ?? null,
+          channel: "voice",
+          interactions: 1,
+          minutes,
+          eventId,
+        });
+      } catch (e) {
+        console.warn("logInteraction failed (tts):", e);
+      }
+
+      try {
+        await prisma.usage.upsert({
+          where: { eventId },
+          create: {
+            eventId,
+            userId: kbData.userId ?? null,
+            botId: kbData.botId ?? null,
+            date: new Date(),
+            interactions: 1,
+            minutes,
+            meta: {
+              kbId,
+              textLength: text.length,
+              voice,
+              speed,
+              cached: false,
+              audioSize: audioBuffer.byteLength,
+              createdAt: new Date().toISOString(),
+            },
+          },
+          update: {
+            date: new Date(),
+            meta: {
+              set: {
+                kbId,
+                textLength: text.length,
+                voice,
+                speed,
+                cached: false,
+                audioSize: audioBuffer.byteLength,
+                lastSeenAt: new Date().toISOString(),
+              },
+            },
+          },
+        });
+      } catch (e) {
+        console.warn("usage upsert failed (tts):", e);
+      }
+    }
 
     return NextResponse.json({
       audioUrl,

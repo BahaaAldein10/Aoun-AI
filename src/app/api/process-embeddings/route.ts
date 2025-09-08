@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { processDocumentEmbeddings } from "@/lib/embedding-service";
-import { notifyUserProcessingDone } from "@/lib/lib/notifier";
+import { notifyUserProcessingDone } from "@/lib/notifier";
 import { prisma } from "@/lib/prisma";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 
@@ -129,10 +129,6 @@ async function handler(req: Request) {
             const existingEmbeddings = await prisma.embedding.count({
               where: {
                 kbId,
-                meta: {
-                  path: "$.documentId",
-                  equals: doc.id,
-                } as { path: string; equals: string },
               },
             });
 

@@ -264,10 +264,6 @@ export async function processDocumentEmbeddings(
     const existingEmbeddings = await prisma.embedding.findMany({
       where: {
         kbId: document.kbId,
-        meta: {
-          path: "$.documentId",
-          equals: documentId,
-        } as { path: string; equals: string },
       },
       select: { id: true },
     });

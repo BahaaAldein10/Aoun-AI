@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
+import { logInteraction } from "@/lib/analytics/logInteraction";
+import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +12,7 @@ export const maxDuration = 30; // seconds - serverless slot
 
 // Helpers (safe at top-level)
 async function dynamicImports() {
-  const [ upstashModule, embeddingModule, upstashVectorModule] =
+  const [upstashModule, embeddingModule, upstashVectorModule] =
     await Promise.all([
       import("@/lib/upstash"),
       import("@/lib/embedding-service"),
@@ -171,7 +173,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing kbId" }, { status: 400 });
 
     // Load KB metadata (cache)
-    let kbData = await cache.getKbMetadata(kbId);
+    let kbData;
     if (!kbData) {
       const kb = await prisma.knowledgeBase.findUnique({
         where: { id: kbId },
@@ -189,13 +191,13 @@ export async function POST(request: NextRequest) {
         id: kb.id,
         userId: kb.userId,
         botId: kb.botId ?? null,
-        metadata: (kb.metadata as Record<string, any>) ?? {},
+        metadata: kb.metadata as unknown as KbMetadata & {
+          apiKeyHash?: string;
+        },
       };
-
-      await cache.setKbMetadata(kbId, kbData);
     }
 
-    const metadata = kbData.metadata ?? {};
+    const metadata = kbData.metadata;
 
     // Auth checks (widget vs API key)
     if (widgetPayload) {
@@ -231,8 +233,6 @@ export async function POST(request: NextRequest) {
         typeof metadata.apiKeyHash === "string"
           ? metadata.apiKeyHash
           : undefined;
-      const storedPlain =
-        typeof metadata.apiKey === "string" ? metadata.apiKey : undefined;
 
       if (!authHeader) {
         return NextResponse.json(
@@ -253,12 +253,6 @@ export async function POST(request: NextRequest) {
             { status: 401 },
           );
         }
-      } else if (storedPlain) {
-        if (authHeader !== storedPlain)
-          return NextResponse.json(
-            { error: "Unauthorized (invalid API key - legacy)" },
-            { status: 401 },
-          );
       } else {
         return NextResponse.json(
           { error: "Knowledge base is private; API key required" },
@@ -500,101 +494,76 @@ export async function POST(request: NextRequest) {
 
     const minutes = estimateMinutesFromText(transcript, 150);
 
-    // Usage logging (non-blocking)
-    void (async function logUsageAtomic(opts: {
-      userId?: string | null;
-      botId?: string | null;
-      kbId: string;
-      conversationId?: string | null;
-      cached: boolean;
-      promptSize: number;
-      retrievedCount: number;
-      minutes?: number;
-      extraMeta?: Record<string, any>;
-    }) {
-      const {
-        userId,
-        botId,
-        kbId,
-        conversationId,
-        cached,
-        promptSize,
-        retrievedCount,
-        minutes = 0,
-        extraMeta,
-      } = opts;
-      try {
-        const hasSelector = Boolean(userId || botId);
-        if (hasSelector) {
-          const where: Record<string, any> = {};
-          if (userId) where.userId = userId;
-          if (botId) where.botId = botId;
+    // ---------------------------
+    // Usage logging (new flow)
+    // ---------------------------
+    const eventId = crypto.randomUUID();
 
-          const updateRes = await prisma.usage.updateMany({
-            where,
-            data: {
-              interactions: { increment: 1 },
-              minutes: { increment: minutes },
-              date: new Date(),
-              meta: {
-                set: {
-                  ...(extraMeta ?? {}),
-                  kbId,
-                  conversationId: conversationId ?? null,
-                  cached,
-                  promptSize,
-                  retrievedCount,
-                  lastSeenAt: new Date().toISOString(),
-                },
-              },
+    try {
+      // 1) update aggregatedUsage and create minimal usage audit row (via helper)
+      await logInteraction({
+        userId: kbData.userId,
+        botId: kbData.botId,
+        channel: "voice",
+        interactions: 1,
+        minutes,
+        eventId,
+      });
+    } catch (err) {
+      console.warn("logInteraction failed (voice):", err);
+    }
+
+    // 2) upsert the usage row to ensure the richer meta is persisted
+    try {
+      await prisma.usage.upsert({
+        where: { eventId },
+        create: {
+          eventId,
+          userId: kbData.userId ?? null,
+          botId: kbData.botId ?? null,
+          date: new Date(),
+          interactions: 1,
+          minutes,
+          meta: {
+            kbId,
+            conversationId: finalConversationId,
+            cached: overallCached,
+            promptSize: transcript ? transcript.length : 0,
+            retrievedCount,
+            transcriptLength: transcript?.length ?? 0,
+            replyLength: reply.length,
+            cachedFlags: {
+              transcript: transcriptCachedFlag,
+              llmResponse: llmResponseCachedFlag,
+              ttsAudio: ttsAudioCachedFlag,
             },
-          });
-
-          if ((updateRes?.count ?? 0) > 0) {
-            return;
-          }
-        }
-
-        await prisma.usage.create({
-          data: {
-            userId: userId ?? null,
-            botId: botId ?? null,
-            date: new Date(),
-            interactions: 1,
-            minutes: minutes,
-            meta: {
+            createdAt: new Date().toISOString(),
+          },
+        },
+        update: {
+          date: new Date(),
+          meta: {
+            set: {
               kbId,
-              conversationId: conversationId ?? null,
-              cached,
-              promptSize,
+              conversationId: finalConversationId,
+              cached: overallCached,
+              promptSize: transcript ? transcript.length : 0,
               retrievedCount,
-              ...(extraMeta ?? {}),
-              createdAt: new Date().toISOString(),
+              transcriptLength: transcript?.length ?? 0,
+              replyLength: reply.length,
+              cachedFlags: {
+                transcript: transcriptCachedFlag,
+                llmResponse: llmResponseCachedFlag,
+                ttsAudio: ttsAudioCachedFlag,
+              },
+              lastSeenAt: new Date().toISOString(),
             },
           },
-        });
-      } catch (err) {
-        console.warn("Failed to write usage log (atomic):", err);
-      }
-    })({
-      userId: kbData.userId,
-      botId: kbData.botId ?? null,
-      kbId,
-      conversationId: finalConversationId,
-      cached: overallCached,
-      promptSize: transcript ? transcript.length : 0,
-      retrievedCount: retrievedCount,
-      minutes,
-      extraMeta: {
-        transcriptLength: transcript?.length ?? 0,
-        replyLength: reply.length,
-        cached: {
-          transcript: transcriptCachedFlag,
-          llmResponse: llmResponseCachedFlag,
-          ttsAudio: ttsAudioCachedFlag,
         },
-      },
-    });
+      });
+    } catch (err) {
+      console.warn("usage upsert failed (voice):", err);
+    }
 
     return NextResponse.json({
       text: transcript,

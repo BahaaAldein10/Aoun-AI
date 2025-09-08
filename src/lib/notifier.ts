@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { sendTransactionalEmail } from "../sendpulse";
+import { sendTransactionalEmail } from "./sendpulse";
 
 export async function notifyUserProcessingDone(
   userId: string,

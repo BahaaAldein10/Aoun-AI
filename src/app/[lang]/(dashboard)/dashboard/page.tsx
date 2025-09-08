@@ -3,7 +3,7 @@ import DashboardClient, {
   UserUsage,
 } from "@/components/dashboard/DashboardClient";
 import EmptyState from "@/components/dashboard/EmptyState";
-import { getUserUsage } from "@/lib/actions/usage";
+import { getUserUsage } from "@/lib/actions/getUserUsage";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 
