@@ -190,6 +190,7 @@ async function handler(req: Request) {
           pages: processedDocuments,
           embeddings: createdEmbeddings,
           link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
+          language: (kb.metadata as KbMetadata)?.language,
         });
         console.log(`User ${userId} notified about KB ${kbId} readiness.`);
       } catch (notifyErr) {
