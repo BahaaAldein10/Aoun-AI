@@ -499,6 +499,13 @@ export async function POST(request: NextRequest) {
     // ---------------------------
     const eventId = crypto.randomUUID();
 
+    // Heuristic correctness detection
+    const fallbackRegex =
+      /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
+    const isFallback = !retrieved.length || fallbackRegex.test(reply);
+    const isCorrect = retrieved.length > 0 && reply.length > 20 && !isFallback;
+    const isNegative = !isCorrect;
+
     try {
       // 1) update aggregatedUsage and create minimal usage audit row (via helper)
       await logInteraction({
@@ -507,6 +514,9 @@ export async function POST(request: NextRequest) {
         channel: "voice",
         interactions: 1,
         minutes,
+        isCorrect,
+        isNegative,
+        isFallback,
         eventId,
       });
     } catch (err) {
@@ -532,6 +542,7 @@ export async function POST(request: NextRequest) {
             retrievedCount,
             transcriptLength: transcript?.length ?? 0,
             replyLength: reply.length,
+            correctness: { isCorrect, isNegative, isFallback },
             cachedFlags: {
               transcript: transcriptCachedFlag,
               llmResponse: llmResponseCachedFlag,

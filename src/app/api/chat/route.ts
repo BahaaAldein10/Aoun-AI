@@ -234,6 +234,18 @@ export async function POST(req: Request) {
       // create an eventId for this request
       const eventId = crypto.randomUUID();
 
+      // Heuristic correctness detection (same as LLM path)
+      const fallbackRegex =
+        /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
+      const isFallback =
+        !cachedResponse.sources?.length ||
+        fallbackRegex.test(cachedResponse.text);
+      const isCorrect =
+        (cachedResponse.sources?.length ?? 0) > 0 &&
+        cachedResponse.text.length > 20 &&
+        !isFallback;
+      const isNegative = !isCorrect;
+
       // 1) Log to aggregated analytics + create minimal usage row via your helper
       try {
         await logInteraction({
@@ -242,6 +254,9 @@ export async function POST(req: Request) {
           channel: "website",
           interactions: 1,
           minutes,
+          isCorrect,
+          isNegative,
+          isFallback,
           eventId,
         });
       } catch (err) {
@@ -442,6 +457,14 @@ export async function POST(req: Request) {
     const chatMinutes = estimateMinutesFromText(prompt, 200);
     const eventId = crypto.randomUUID();
 
+    // Heuristic correctness detection
+    const fallbackRegex =
+      /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
+    const isFallback = !retrieved.length || fallbackRegex.test(assistantText);
+    const isCorrect =
+      retrieved.length > 0 && assistantText.length > 20 && !isFallback;
+    const isNegative = !isCorrect;
+
     // 1) call your analytics helper to update aggregatedUsage and create the minimal usage audit row
     try {
       await logInteraction({
@@ -450,6 +473,9 @@ export async function POST(req: Request) {
         channel: "website",
         interactions: 1,
         minutes: chatMinutes,
+        isCorrect,
+        isNegative,
+        isFallback,
         eventId,
       });
     } catch (err) {

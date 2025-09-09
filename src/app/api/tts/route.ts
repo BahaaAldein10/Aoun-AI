@@ -225,6 +225,9 @@ export async function POST(request: NextRequest) {
             channel: "voice",
             interactions: 1,
             minutes,
+            isCorrect: true, // 👈 always mark TTS as correct
+            isNegative: false,
+            isFallback: false,
             eventId,
           });
         } catch (e) {
@@ -362,6 +365,9 @@ export async function POST(request: NextRequest) {
           channel: "voice",
           interactions: 1,
           minutes,
+          isCorrect: true, // 👈 always mark TTS as correct
+          isNegative: false,
+          isFallback: false,
           eventId,
         });
       } catch (e) {
@@ -383,9 +389,14 @@ export async function POST(request: NextRequest) {
               textLength: text.length,
               voice,
               speed,
-              cached: false,
-              audioSize: audioBuffer.byteLength,
+              cached: true, // or false
+              audioSize: cached?.length ?? audioBuffer.byteLength,
               createdAt: new Date().toISOString(),
+              correctness: {
+                isCorrect: true,
+                isNegative: false,
+                isFallback: false,
+              },
             },
           },
           update: {
