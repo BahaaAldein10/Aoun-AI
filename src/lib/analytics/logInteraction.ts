@@ -15,6 +15,7 @@ type LogParams = {
   isNegative?: boolean; // thumbs-down
   isFallback?: boolean; // bot returned fallback / handed off
   eventId?: string; // optional idempotency key
+  meta?: Record<string, unknown>; // additional metadata to store in usage record
 };
 
 /**
@@ -32,9 +33,19 @@ export async function logInteraction(params: LogParams) {
     isNegative = false,
     isFallback = false,
     eventId = randomUUID(),
+    meta = {},
   } = params;
 
   const day = new Date().toISOString().slice(0, 10);
+
+  // Merge base metadata with additional meta
+  const combinedMeta = {
+    channel,
+    isCorrect,
+    isNegative,
+    isFallback,
+    ...meta, // spread additional metadata from the caller
+  };
 
   // 1) Create audit Usage row (idempotent via unique eventId)
   try {
@@ -46,7 +57,7 @@ export async function logInteraction(params: LogParams) {
         date: new Date(),
         interactions,
         minutes,
-        meta: { channel, isCorrect, isNegative, isFallback },
+        meta: combinedMeta,
       },
     });
   } catch (err: unknown) {

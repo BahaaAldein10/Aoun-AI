@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { logInteraction } from "@/lib/analytics/logInteraction";
+import {
+  recordInvocationMetrics,
+  startInvocation,
+} from "@/lib/monitoring/vercelMetrics";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
@@ -71,6 +75,9 @@ export async function POST(request: NextRequest) {
     upstashVector,
   } = await dynamicImports();
 
+  const requestPath = new URL(request.url).pathname;
+  const invCtx = startInvocation();
+
   // lazy-init cache instance
   const cache = CacheService.getInstance();
 
@@ -103,7 +110,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Rate limiting
-    const userIdentifier = getUserIdentifier(request, widgetPayload);
+    const userIdentifier = getUserIdentifier(request, widgetPayload) ?? null;
     const rateLimit = await checkRateLimit(userIdentifier, "voice");
 
     if (!rateLimit.success) {
@@ -392,7 +399,11 @@ export async function POST(request: NextRequest) {
     const responseHash = createHash(llmInput);
     let reply = await cache.get(`llm_response:${responseHash}`);
 
+    let llmMs = 0;
+
     if (!reply) {
+      // --------- Measure LLM response time ---------
+      const llmStart = Date.now();
       const llmResp = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
@@ -406,6 +417,8 @@ export async function POST(request: NextRequest) {
           temperature: 0.2,
         }),
       });
+      llmMs = Date.now() - llmStart; // <--- store elapsed ms
+      // ---------------------------------------------
 
       if (!llmResp.ok) {
         const txt = await llmResp.text().catch(() => "");
@@ -518,6 +531,13 @@ export async function POST(request: NextRequest) {
         isNegative,
         isFallback,
         eventId,
+        meta: {
+          responseTimeMs: llmMs,
+          requestPath,
+          userIdentifier,
+          promptSize: transcript ? transcript.length : 0,
+          retrievedCount,
+        },
       });
     } catch (err) {
       console.warn("logInteraction failed (voice):", err);
@@ -548,6 +568,9 @@ export async function POST(request: NextRequest) {
               llmResponse: llmResponseCachedFlag,
               ttsAudio: ttsAudioCachedFlag,
             },
+            responseTimeMs: llmMs,
+            requestPath,
+            userIdentifier,
             createdAt: new Date().toISOString(),
           },
         },
@@ -567,6 +590,9 @@ export async function POST(request: NextRequest) {
                 llmResponse: llmResponseCachedFlag,
                 ttsAudio: ttsAudioCachedFlag,
               },
+              responseTimeMs: llmMs,
+              requestPath,
+              userIdentifier,
               lastSeenAt: new Date().toISOString(),
             },
           },
@@ -575,6 +601,13 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.warn("usage upsert failed (voice):", err);
     }
+
+    void recordInvocationMetrics(await invCtx, {
+      llmResponseMs: llmMs,
+      userId: kbData?.userId,
+      botId: kbData?.botId,
+      tag: "voice",
+    });
 
     return NextResponse.json({
       text: transcript,

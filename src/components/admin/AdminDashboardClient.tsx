@@ -27,7 +27,7 @@ import { Avatar, AvatarImage } from "../ui/avatar";
 type StatShape = {
   totalUsers: number;
   totalBots: number;
-  avgResponseTime: number;
+  avgResponseTime: number | string;
   serverStatus: string;
 };
 

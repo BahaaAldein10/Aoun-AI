@@ -1,4 +1,9 @@
+// app/(admin)/overview/page.tsx  (or your existing AdminOverviewPage file)
 import AdminDashboardClient from "@/components/admin/AdminDashboardClient";
+import {
+  getAvgResponseTime,
+  getServerStatus,
+} from "@/lib/actions/adminMonitoring";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
 
@@ -9,7 +14,6 @@ interface AdminOverviewPageProps {
 const MONTHS_TO_SHOW = 6;
 
 function formatMonthLabel(date: Date, lang: SupportedLang) {
-  // map SupportedLang to a valid locale
   const locale = lang === "ar" ? "ar-EG" : "en-US";
   return date.toLocaleString(locale, { month: "short" });
 }
@@ -33,6 +37,8 @@ const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
     recentSubscriptions,
     botsSince,
     usersSince,
+    avgResponseTimeMs,
+    serverStatusObj,
   ] = await Promise.all([
     prisma.user.count(),
     prisma.bot.count(),
@@ -60,21 +66,25 @@ const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
         },
       },
     }),
-    // items for Agents Created Over Time aggregation
     prisma.bot.findMany({
       where: { createdAt: { gte: startDate } },
       select: { createdAt: true },
       orderBy: { createdAt: "asc" },
     }),
-    // items for New User Growth aggregation
     prisma.user.findMany({
       where: { createdAt: { gte: startDate } },
       select: { createdAt: true },
       orderBy: { createdAt: "asc" },
     }),
+    // monitoring helpers
+    getAvgResponseTime(""), // we'll compute site-wide: pass "" or a userId if you want per-admin user
+    getServerStatus(),
   ]);
 
-  // Build month buckets
+  // NOTE: getAvgResponseTime returned null if no data
+  const avgResponseTimeDisplay = avgResponseTimeMs ?? null;
+
+  // Build month buckets (same as yours)...
   const monthBuckets = Array.from({ length: MONTHS_TO_SHOW }).map((_, i) => {
     const d = new Date(
       now.getFullYear(),
@@ -113,11 +123,11 @@ const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
   const stats = {
     totalUsers,
     totalBots,
-    avgResponseTime: 100,
-    serverStatus: "Online",
+    avgResponseTime: avgResponseTimeDisplay ?? "—",
+    serverStatus: serverStatusObj.status,
+    serverStatusDetails: serverStatusObj.details,
   };
 
-  // Map recentSubscriptions to serializable shape
   const recentSubscriptionsSerialized = recentSubscriptions.map((s) => ({
     id: s.id,
     user: s.user

@@ -2,6 +2,10 @@
 export const runtime = "nodejs";
 
 import { logInteraction } from "@/lib/analytics/logInteraction";
+import {
+  recordInvocationMetrics,
+  startInvocation,
+} from "@/lib/monitoring/vercelMetrics";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextResponse } from "next/server";
@@ -62,6 +66,8 @@ export async function POST(req: Request) {
     import("@/search/upstash-search"),
   ]);
 
+  const requestPath = new URL(req.url).pathname;
+  const invCtx = startInvocation(); // <--- start invocation measurement
   const { CacheService, checkRateLimit, createHash, getUserIdentifier } =
     upstashModule as any;
   const upstashVector = (upstashVectorModule as any).default;
@@ -117,7 +123,7 @@ export async function POST(req: Request) {
     }
 
     // Rate limiting
-    const userIdentifier = getUserIdentifier(req, widgetPayload);
+    const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
     const rateLimit = await checkRateLimit(userIdentifier, "chat");
 
     if (!rateLimit.success) {
@@ -258,6 +264,13 @@ export async function POST(req: Request) {
           isNegative,
           isFallback,
           eventId,
+          meta: {
+            requestPath,
+            userIdentifier,
+            promptSize: message.length,
+            retrievedCount: cachedResponse.sources?.length ?? 0,
+            cached: true,
+          },
         });
       } catch (err) {
         console.warn("logInteraction failed (cached path):", err);
@@ -280,6 +293,8 @@ export async function POST(req: Request) {
               cached: true,
               promptSize: message.length,
               retrievedCount: cachedResponse.sources?.length ?? 0,
+              requestPath,
+              userIdentifier,
               createdAt: new Date().toISOString(),
             },
           },
@@ -292,6 +307,8 @@ export async function POST(req: Request) {
                 cached: true,
                 promptSize: message.length,
                 retrievedCount: cachedResponse.sources?.length ?? 0,
+                requestPath,
+                userIdentifier,
                 lastSeenAt: new Date().toISOString(),
               },
             },
@@ -403,14 +420,21 @@ export async function POST(req: Request) {
     const promptHash = createHash(prompt);
     let assistantText = await cache.get(`chat_llm:${promptHash}`);
 
+    let llmMs = 0; // <--- initialize
+
     if (!assistantText) {
       try {
+        // ---------------------------
+        // Measure LLM response time
+        // ---------------------------
+        const llmStart = Date.now();
         const resp: any = await openai.responses.create({
           model: OPENAI_MODEL,
           input: prompt,
           max_output_tokens: 800,
           temperature: 0.1,
         });
+        llmMs = Date.now() - llmStart;
 
         if (resp?.output && Array.isArray(resp.output)) {
           assistantText = resp.output
@@ -452,7 +476,7 @@ export async function POST(req: Request) {
     await cache.setChatResponse(kbId, messageHash, responseData);
 
     // ---------------------------
-    // Usage logging (new flow)
+    // Usage logging (LLM path) with responseTimeMs
     // ---------------------------
     const chatMinutes = estimateMinutesFromText(prompt, 200);
     const eventId = crypto.randomUUID();
@@ -465,7 +489,6 @@ export async function POST(req: Request) {
       retrieved.length > 0 && assistantText.length > 20 && !isFallback;
     const isNegative = !isCorrect;
 
-    // 1) call your analytics helper to update aggregatedUsage and create the minimal usage audit row
     try {
       await logInteraction({
         userId: kbData.userId,
@@ -477,12 +500,19 @@ export async function POST(req: Request) {
         isNegative,
         isFallback,
         eventId,
+        meta: {
+          responseTimeMs: llmMs,
+          requestPath,
+          userIdentifier,
+          promptSize: prompt.length,
+          retrievedCount: retrieved.length,
+        },
       });
     } catch (err) {
       console.warn("logInteraction failed (llm path):", err);
     }
 
-    // 2) upsert the usage row to ensure the richer meta is persisted
+    // Upsert usage row with responseTimeMs
     try {
       await prisma.usage.upsert({
         where: { eventId },
@@ -499,6 +529,9 @@ export async function POST(req: Request) {
             cached: false,
             promptSize: prompt.length,
             retrievedCount: retrieved.length,
+            responseTimeMs: llmMs, // <--- attach response time
+            requestPath,
+            userIdentifier,
             createdAt: new Date().toISOString(),
           },
         },
@@ -511,6 +544,9 @@ export async function POST(req: Request) {
               cached: false,
               promptSize: prompt.length,
               retrievedCount: retrieved.length,
+              responseTimeMs: llmMs, // <--- attach response time
+              requestPath,
+              userIdentifier,
               lastSeenAt: new Date().toISOString(),
             },
           },
@@ -519,6 +555,16 @@ export async function POST(req: Request) {
     } catch (err) {
       console.warn("usage upsert failed (llm path):", err);
     }
+
+    // -----------------------------
+    // record metrics for monitoring
+    // -----------------------------
+    void recordInvocationMetrics(await invCtx, {
+      llmResponseMs: llmMs,
+      userId: kbData.userId,
+      botId: kbData.botId,
+      tag: "chat", // you can also use "voice" or "tts" in other routes
+    });
 
     // Return
     return NextResponse.json({

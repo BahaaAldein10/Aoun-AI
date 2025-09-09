@@ -35,9 +35,9 @@ type AIFlow = {
 };
 type ApiTime = { endpoint: string; p95: number };
 type KPIProps = {
-  cpuUsagePercent: number;
-  memoryUsedGB: number;
-  memoryTotalGB: number;
+  cpuUsagePercent: number | null;
+  memoryUsedGB: number | null;
+  memoryTotalGB: number | null;
   apiCalls24h: number;
   apiCallsDeltaPercent: number;
   errorRatePercent: number;

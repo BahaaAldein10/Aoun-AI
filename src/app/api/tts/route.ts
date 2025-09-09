@@ -5,6 +5,10 @@ export const maxDuration = 30;
 
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { logInteraction } from "@/lib/analytics/logInteraction"; // analytics helper
+import {
+  recordInvocationMetrics,
+  startInvocation,
+} from "@/lib/monitoring/vercelMetrics";
 import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
@@ -30,6 +34,9 @@ function estimateMinutesFromText(text?: string | null, wpm = 150) {
 export async function POST(request: NextRequest) {
   // lazy/dynamic imports to avoid top-level evaluation (break circular imports)
   const upstash = await import("@/lib/upstash");
+  const requestPath = new URL(request.url).pathname;
+  const invCtx = startInvocation(); // <--- start invocation measurement
+
   const { createHash } = upstash;
   const { CacheService, checkRateLimit, getUserIdentifier } = upstash;
 
@@ -62,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     // rate limit (use 'api' limiter or change to 'voice' if you'd prefer)
-    const userIdentifier = getUserIdentifier(request, widgetPayload);
+    const userIdentifier = getUserIdentifier(request, widgetPayload) ?? null;
     const rateLimit = await checkRateLimit(userIdentifier, "api");
 
     if (!rateLimit.success) {
@@ -229,6 +236,14 @@ export async function POST(request: NextRequest) {
             isNegative: false,
             isFallback: false,
             eventId,
+            meta: {
+              requestPath,
+              userIdentifier,
+              textLength: text.length,
+              voice,
+              speed,
+              cached: true,
+            },
           });
         } catch (e) {
           console.warn("logInteraction failed (tts cached):", e);
@@ -252,6 +267,8 @@ export async function POST(request: NextRequest) {
                 speed,
                 cached: true,
                 audioSize: cached?.length ?? 0, // best-effort
+                requestPath,
+                userIdentifier,
                 createdAt: new Date().toISOString(),
               },
             },
@@ -265,6 +282,8 @@ export async function POST(request: NextRequest) {
                   speed,
                   cached: true,
                   audioSize: cached?.length ?? 0,
+                  requestPath,
+                  userIdentifier,
                   lastSeenAt: new Date().toISOString(),
                 },
               },
@@ -290,6 +309,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate TTS via OpenAI (audio/speech endpoint)
+    // --------- Measure TTS response time ---------
+    let ttsMs = 0;
+
+    const ttsStart = Date.now();
     const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -304,6 +327,8 @@ export async function POST(request: NextRequest) {
         speed,
       }),
     });
+    ttsMs = Date.now() - ttsStart; // <--- store elapsed ms
+    // --------------------------------------------
 
     if (!ttsResp.ok) {
       const txt = await ttsResp.text().catch(() => "");
@@ -369,6 +394,15 @@ export async function POST(request: NextRequest) {
           isNegative: false,
           isFallback: false,
           eventId,
+          meta: {
+            responseTimeMs: ttsMs,
+            requestPath,
+            userIdentifier,
+            textLength: text.length,
+            voice,
+            speed,
+            cached: false,
+          },
         });
       } catch (e) {
         console.warn("logInteraction failed (tts):", e);
@@ -389,9 +423,12 @@ export async function POST(request: NextRequest) {
               textLength: text.length,
               voice,
               speed,
-              cached: true, // or false
-              audioSize: cached?.length ?? audioBuffer.byteLength,
+              cached: false,
+              audioSize: audioBuffer.byteLength,
               createdAt: new Date().toISOString(),
+              responseTimeMs: ttsMs,
+              requestPath,
+              userIdentifier,
               correctness: {
                 isCorrect: true,
                 isNegative: false,
@@ -410,6 +447,9 @@ export async function POST(request: NextRequest) {
                 cached: false,
                 audioSize: audioBuffer.byteLength,
                 lastSeenAt: new Date().toISOString(),
+                responseTimeMs: ttsMs,
+                requestPath,
+                userIdentifier,
               },
             },
           },
@@ -418,6 +458,13 @@ export async function POST(request: NextRequest) {
         console.warn("usage upsert failed (tts):", e);
       }
     }
+
+    void recordInvocationMetrics(await invCtx, {
+      llmResponseMs: ttsMs,
+      userId: kbData?.userId,
+      botId: kbData?.botId,
+      tag: "tts",
+    });
 
     return NextResponse.json({
       audioUrl,

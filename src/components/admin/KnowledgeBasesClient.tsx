@@ -1,3 +1,4 @@
+// components/admin/KnowledgeBasesClient.tsx
 "use client";
 
 import { Button } from "@/components/ui/button";
@@ -15,9 +16,23 @@ interface Props {
   initialKbs?: KBWithOwner[];
   lang: SupportedLang;
   dict: Dictionary;
+  stats?: {
+    totalCachedItems?: number;
+    totalRequests?: number;
+    hitCount?: number;
+    cacheHitRate?: number;
+    totalAudioBytes?: number;
+    totalKnowledgeBases?: number;
+    totalDocuments?: number;
+  };
 }
 
-const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
+const KnowledgeBasesClient = ({
+  initialKbs = [],
+  lang,
+  dict,
+  stats = {},
+}: Props) => {
   const [tableInstance, setTableInstance] = useState<Table<KBWithOwner> | null>(
     null,
   );
@@ -45,14 +60,17 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
     toast.success(t.toast_exported);
   }
 
-  // ---------- PLACEHOLDER STATS ----------
-  // Replace these with real values fetched from an API/DB when available.
-  const totalCachedItems = 0;
-  const totalRequests = 0;
-  const hitCount = 0;
-  const totalAudioBytes = 0; // bytes
-
-  const cacheHitRate = totalRequests > 0 ? hitCount / totalRequests : 0;
+  // ---------- STATS (real values passed from server) ----------
+  const totalCachedItems = stats.totalCachedItems ?? 0;
+  const totalRequests = stats.totalRequests ?? 0;
+  const hitCount = stats.hitCount ?? 0;
+  const cacheHitRate =
+    typeof stats.cacheHitRate === "number"
+      ? stats.cacheHitRate
+      : totalRequests > 0
+        ? hitCount / totalRequests
+        : 0;
+  const totalAudioBytes = stats.totalAudioBytes ?? 0;
 
   function formatBytesToMB(bytes: number) {
     return (bytes / 1024 / 1024).toFixed(2);
@@ -74,7 +92,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
         <Button onClick={exportJson}>{t.export_json}</Button>
       </div>
 
-      {/* ---------- STATS CARDS: insert here ---------- */}
+      {/* ---------- STATS CARDS ---------- */}
       <div
         className={cn(
           "grid gap-4",
@@ -86,9 +104,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
         <Card className="p-4">
           <CardHeader className="p-0">
             <CardTitle className="text-sm font-medium">
-              {t.cache_total_items_title ??
-                t.cache_total_items_title ??
-                "Total Cached Items"}
+              {t.cache_total_items_title ?? "Total Cached Items"}
             </CardTitle>
           </CardHeader>
           <CardContent className="mt-2 p-0">
@@ -99,8 +115,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
             </div>
             <p className="text-muted-foreground mt-1 text-sm">
               {t.cache_total_items_desc ??
-                t.cache_total_items_desc ??
-                "Total unique responses stored."}
+                "Unique cached entries (best-effort)"}
             </p>
           </CardContent>
         </Card>
@@ -109,9 +124,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
         <Card className="p-4">
           <CardHeader className="p-0">
             <CardTitle className="text-sm font-medium">
-              {t.cache_hit_rate_title ??
-                t.cache_hit_rate_title ??
-                "Cache Hit Rate"}
+              {t.cache_hit_rate_title ?? "Cache Hit Rate"}
             </CardTitle>
           </CardHeader>
           <CardContent className="mt-2 p-0">
@@ -121,13 +134,12 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
               </div>
               <div className="text-muted-foreground text-sm">
                 {new Intl.NumberFormat(locale).format(totalRequests)}{" "}
-                {t.cache_requests_label ?? t.cache_requests_label ?? "requests"}
+                {t.cache_requests_label ?? "requests"}
               </div>
             </div>
             <p className="text-muted-foreground mt-1 text-sm">
               {t.cache_hit_rate_desc ??
-                t.cache_hit_rate_desc ??
-                "Of 0 total requests."}
+                "Ratio of cache hits to total requests (in-memory analytics)"}
             </p>
           </CardContent>
         </Card>
@@ -136,9 +148,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
         <Card className="p-4">
           <CardHeader className="p-0">
             <CardTitle className="text-sm font-medium">
-              {t.cache_audio_size_title ??
-                t.cache_audio_size_title ??
-                "Total Audio Size"}
+              {t.cache_audio_size_title ?? "Total Audio Size"}
             </CardTitle>
           </CardHeader>
           <CardContent className="mt-2 p-0">
@@ -149,8 +159,7 @@ const KnowledgeBasesClient = ({ initialKbs = [], lang, dict }: Props) => {
             </div>
             <p className="text-muted-foreground mt-1 text-sm">
               {t.cache_audio_size_desc ??
-                t.cache_audio_size_desc ??
-                "Total size of cached audio files."}
+                "Total size of cached audio files (UploadedFile)"}
             </p>
           </CardContent>
         </Card>
