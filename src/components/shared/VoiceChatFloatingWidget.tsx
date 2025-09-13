@@ -1,13 +1,14 @@
 "use client";
 
 import { useDictionary } from "@/contexts/dictionary-context";
+import { SupportedLang } from "@/lib/dictionaries";
 import { cn } from "@/lib/utils";
 import { MessageSquare, Minimize2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import VoiceChatWidget from "./VoiceChatWidget";
 
 interface VoiceChatFloatingWidgetProps {
-  lang?: string;
+  lang?: SupportedLang;
   kbId?: string;
 }
 
@@ -181,11 +182,7 @@ export default function VoiceChatFloatingWidget({
 
               {/* Widget Content */}
               <div className="h-[calc(100%-4rem)]">
-                <VoiceChatWidget
-                  lang={lang}
-                  onClose={() => setIsOpen(false)}
-                  kbId={kbId}
-                />
+                <VoiceChatWidget lang={lang} onClose={() => setIsOpen(false)} />
               </div>
             </div>
           </div>

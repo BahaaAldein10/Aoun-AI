@@ -1,10 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // app/api/tts/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
-import { logInteraction } from "@/lib/analytics/logInteraction"; // analytics helper
+import { logInteraction } from "@/lib/analytics/logInteraction";
 import {
   recordInvocationMetrics,
   startInvocation,
@@ -13,6 +13,10 @@ import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
+
+// Demo configuration
+const DEMO_KB_ID = process.env.DEMO_KB_ID!;
+const DEMO_TTS_LIMIT_PER_IP = 10; // Max TTS requests per IP per day for demo
 
 /** helper to create sha256 buffer (timing-safe compare) */
 function sha256Buffer(input: string) {
@@ -29,13 +33,30 @@ function estimateMinutesFromText(text?: string | null, wpm = 150) {
   return Math.max(1, Math.ceil(words / wpm));
 }
 
-// NOTE: keep lightweight constants at top-level only (no client initialization)
+/** Track demo TTS usage */
+async function trackDemoTTSUsage(
+  clientIP: string,
+  cache: any,
+): Promise<{ usage: number; allowed: boolean }> {
+  const today = new Date().toDateString();
+  const demoTtsKey = `demo_tts:${clientIP}:${today}`;
+
+  const usage = (await cache.get(demoTtsKey)) || 0;
+  const newUsage = usage + 1;
+
+  if (newUsage > DEMO_TTS_LIMIT_PER_IP) {
+    return { usage: newUsage, allowed: false };
+  }
+
+  await cache.set(demoTtsKey, newUsage, 86400); // 24 hours TTL
+  return { usage: newUsage, allowed: true };
+}
 
 export async function POST(request: NextRequest) {
-  // lazy/dynamic imports to avoid top-level evaluation (break circular imports)
+  // lazy/dynamic imports to avoid top-level evaluation
   const upstash = await import("@/lib/upstash");
   const requestPath = new URL(request.url).pathname;
-  const invCtx = startInvocation(); // <--- start invocation measurement
+  const invCtx = startInvocation();
 
   const { createHash } = upstash;
   const { CacheService, checkRateLimit, getUserIdentifier } = upstash;
@@ -47,58 +68,12 @@ export async function POST(request: NextRequest) {
   const cache = CacheService.getInstance();
 
   try {
-    // parse auth header (may be widget jwt or API key)
-    const authHeader = (request.headers.get("authorization") || "").replace(
-      /^Bearer\s+/,
-      "",
-    );
-
-    // try decode widget JWT if present
-    let widgetPayload: { kbId?: string; origin?: string } | null = null;
-    if (authHeader && JWT_SECRET) {
-      try {
-        const key = new TextEncoder().encode(JWT_SECRET);
-        const { payload } = await jwtVerify(authHeader, key);
-        widgetPayload = {
-          kbId: payload.kbId as string | undefined,
-          origin: payload.origin as string | undefined,
-        };
-      } catch {
-        widgetPayload = null;
-      }
-    }
-
-    // rate limit (use 'api' limiter or change to 'voice' if you'd prefer)
-    const userIdentifier = getUserIdentifier(request, widgetPayload) ?? null;
-    const rateLimit = await checkRateLimit(userIdentifier, "api");
-
-    if (!rateLimit.success) {
-      return NextResponse.json(
-        {
-          error: "Rate limit exceeded",
-          limit: rateLimit.limit,
-          remaining: rateLimit.remaining,
-          reset: rateLimit.reset.toISOString(),
-        },
-        { status: 429 },
-      );
-    }
-
-    // ensure OpenAI key exists
-    if (!OPENAI_KEY) {
-      console.error("OPENAI_API_KEY not configured");
-      return NextResponse.json(
-        { error: "Service configuration error" },
-        { status: 500 },
-      );
-    }
-
-    // parse body
+    // parse body first to check for demo flag
     const body = await request.json().catch(() => null);
     if (!body)
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
 
-    const { text, voice = "alloy", speed = 1.0, kbId } = body;
+    const { text, voice = "alloy", speed = 1.0, kbId, isDemo = false } = body;
 
     // validate inputs
     if (!text || typeof text !== "string") {
@@ -126,92 +101,185 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Load KB metadata so we can validate API key / widget origin
-    let kbData;
-    if (!kbData) {
-      const kb = await prisma.knowledgeBase.findUnique({
-        where: { id: kbId },
-        select: { id: true, userId: true, botId: true, metadata: true },
-      });
+    // ensure OpenAI key exists
+    if (!OPENAI_KEY) {
+      console.error("OPENAI_API_KEY not configured");
+      return NextResponse.json(
+        { error: "Service configuration error" },
+        { status: 500 },
+      );
+    }
 
-      if (!kb) {
+    // Demo-specific handling
+    let demoTtsUsage: { usage: number; allowed: boolean } | null = null;
+
+    if (isDemo || kbId === DEMO_KB_ID) {
+      const clientIP =
+        request.headers.get("x-forwarded-for")?.split(",")[0] ||
+        request.headers.get("x-real-ip") ||
+        "unknown";
+
+      demoTtsUsage = await trackDemoTTSUsage(clientIP, cache);
+
+      if (!demoTtsUsage.allowed) {
         return NextResponse.json(
-          { error: "Knowledge base not found" },
-          { status: 404 },
+          {
+            error: "Demo TTS limit reached",
+            message:
+              "You've reached the daily demo TTS limit. Please sign up for unlimited access.",
+            limit: DEMO_TTS_LIMIT_PER_IP,
+            usage: demoTtsUsage.usage,
+          },
+          { status: 429 },
         );
       }
-
-      kbData = {
-        id: kb.id,
-        userId: kb.userId,
-        botId: kb.botId ?? null,
-        metadata: kb.metadata as unknown as KbMetadata & {
-          apiKeyHash?: string;
-        },
-      };
     }
+
+    // parse auth header (may be widget jwt or API key)
+    const authHeader = (request.headers.get("authorization") || "").replace(
+      /^Bearer\s+/,
+      "",
+    );
+
+    // try decode widget JWT if present (skip for demo)
+    let widgetPayload: { kbId?: string; origin?: string } | null = null;
+    if (authHeader && JWT_SECRET && !isDemo && kbId !== DEMO_KB_ID) {
+      try {
+        const key = new TextEncoder().encode(JWT_SECRET);
+        const { payload } = await jwtVerify(authHeader, key);
+        widgetPayload = {
+          kbId: payload.kbId as string | undefined,
+          origin: payload.origin as string | undefined,
+        };
+      } catch {
+        widgetPayload = null;
+      }
+    }
+
+    // rate limit (use demo tracking or regular rate limiting)
+    let rateLimit;
+    if (isDemo || kbId === DEMO_KB_ID) {
+      // For demo, we use our custom tracking above
+      rateLimit = {
+        success: true,
+        remaining: Math.max(
+          0,
+          DEMO_TTS_LIMIT_PER_IP - (demoTtsUsage?.usage || 0),
+        ),
+        reset: new Date(Date.now() + 86400000), // 24 hours from now
+      };
+    } else {
+      const userIdentifier = getUserIdentifier(request, widgetPayload) ?? null;
+      rateLimit = await checkRateLimit(userIdentifier, "api");
+
+      if (!rateLimit.success) {
+        return NextResponse.json(
+          {
+            error: "Rate limit exceeded",
+            limit: rateLimit.limit,
+            remaining: rateLimit.remaining,
+            reset: rateLimit.reset.toISOString(),
+          },
+          { status: 429 },
+        );
+      }
+    }
+
+    // Load KB metadata (use demo data for demo requests)
+    const targetKbId = isDemo || kbId === DEMO_KB_ID ? DEMO_KB_ID : kbId;
+    const kb = await prisma.knowledgeBase.findUnique({
+      where: { id: targetKbId },
+      select: {
+        id: true,
+        title: true,
+        metadata: true,
+        userId: true,
+        botId: true,
+      },
+    });
+
+    if (!kb) {
+      return NextResponse.json(
+        {
+          error: isDemo
+            ? "Demo service unavailable"
+            : "Knowledge base not found",
+        },
+        { status: 404 },
+      );
+    }
+
+    const kbData = {
+      id: kb.id,
+      title: kb.title,
+      userId: kb.userId,
+      botId: kb.botId,
+      metadata: (kb.metadata as Record<string, any>) ?? {},
+    };
 
     const metadata = kbData.metadata;
 
-    // Auth checks (widget vs API key)
-    if (widgetPayload) {
-      if (widgetPayload.kbId !== kbId) {
-        return NextResponse.json(
-          { error: "KB ID mismatch in widget token" },
-          { status: 403 },
-        );
-      }
-
-      const allowedOrigins = Array.isArray(metadata.allowedOrigins)
-        ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
-        : [];
-
-      if (widgetPayload.origin) {
-        if (
-          allowedOrigins.length > 0 &&
-          !allowedOrigins.includes(widgetPayload.origin)
-        ) {
+    // Auth checks (skip for demo)
+    if (!isDemo && kbId !== DEMO_KB_ID) {
+      if (widgetPayload) {
+        if (widgetPayload.kbId !== kbId) {
           return NextResponse.json(
-            { error: "Origin not allowed for widget token" },
+            { error: "KB ID mismatch in widget token" },
+            { status: 403 },
+          );
+        }
+
+        const allowedOrigins = Array.isArray(metadata.allowedOrigins)
+          ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
+          : [];
+
+        if (widgetPayload.origin) {
+          if (
+            allowedOrigins.length > 0 &&
+            !allowedOrigins.includes(widgetPayload.origin)
+          ) {
+            return NextResponse.json(
+              { error: "Origin not allowed for widget token" },
+              { status: 403 },
+            );
+          }
+        } else {
+          return NextResponse.json(
+            { error: "Invalid widget token (missing origin)" },
             { status: 403 },
           );
         }
       } else {
-        return NextResponse.json(
-          { error: "Invalid widget token (missing origin)" },
-          { status: 403 },
-        );
-      }
-    } else {
-      const storedHash =
-        typeof metadata.apiKeyHash === "string"
-          ? metadata.apiKeyHash
-          : undefined;
+        const storedHash =
+          typeof metadata.apiKeyHash === "string"
+            ? metadata.apiKeyHash
+            : undefined;
 
-      if (!authHeader) {
-        return NextResponse.json(
-          { error: "Unauthorized (missing API key or widget token)" },
-          { status: 401 },
-        );
-      }
-
-      if (storedHash) {
-        const incomingBuf = sha256Buffer(authHeader);
-        const storedBuf = Buffer.from(storedHash, "hex");
-        if (
-          incomingBuf.length !== storedBuf.length ||
-          !crypto.timingSafeEqual(incomingBuf, storedBuf)
-        ) {
+        if (!authHeader) {
           return NextResponse.json(
-            { error: "Unauthorized (invalid API key)" },
+            { error: "Unauthorized (missing API key or widget token)" },
             { status: 401 },
           );
         }
-      } else {
-        return NextResponse.json(
-          { error: "Knowledge base is private; API key required" },
-          { status: 401 },
-        );
+
+        if (storedHash) {
+          const incomingBuf = sha256Buffer(authHeader);
+          const storedBuf = Buffer.from(storedHash, "hex");
+          if (
+            incomingBuf.length !== storedBuf.length ||
+            !crypto.timingSafeEqual(incomingBuf, storedBuf)
+          ) {
+            return NextResponse.json(
+              { error: "Unauthorized (invalid API key)" },
+              { status: 401 },
+            );
+          }
+        } else {
+          return NextResponse.json(
+            { error: "Knowledge base is private; API key required" },
+            { status: 401 },
+          );
+        }
       }
     }
 
@@ -221,10 +289,14 @@ export async function POST(request: NextRequest) {
     const cached = await cache.getTtsAudio(ttsHash, voice);
 
     if (cached) {
-      // If kbId present, record analytics (non-blocking) — eventId used for idempotency
+      // Record analytics for cached response
       if (kbId && kbData) {
         const eventId = crypto.randomUUID();
         const minutes = estimateMinutesFromText(text);
+        const userIdentifier = isDemo
+          ? "demo-user"
+          : getUserIdentifier(request, widgetPayload);
+
         try {
           await logInteraction({
             userId: kbData.userId,
@@ -232,7 +304,7 @@ export async function POST(request: NextRequest) {
             channel: "voice",
             interactions: 1,
             minutes,
-            isCorrect: true, // 👈 always mark TTS as correct
+            isCorrect: true, // always mark TTS as correct
             isNegative: false,
             isFallback: false,
             eventId,
@@ -243,13 +315,14 @@ export async function POST(request: NextRequest) {
               voice,
               speed,
               cached: true,
+              isDemo: isDemo || kbId === DEMO_KB_ID,
             },
           });
         } catch (e) {
           console.warn("logInteraction failed (tts cached):", e);
         }
 
-        // upsert usage row with richer meta (best-effort, non-fatal)
+        // upsert usage row with richer meta
         try {
           await prisma.usage.upsert({
             where: { eventId },
@@ -261,14 +334,15 @@ export async function POST(request: NextRequest) {
               interactions: 1,
               minutes,
               meta: {
-                kbId,
+                kbId: kbData.id,
                 textLength: text.length,
                 voice,
                 speed,
                 cached: true,
-                audioSize: cached?.length ?? 0, // best-effort
+                audioSize: cached?.length ?? 0,
                 requestPath,
                 userIdentifier,
+                isDemo: isDemo || kbId === DEMO_KB_ID,
                 createdAt: new Date().toISOString(),
               },
             },
@@ -276,7 +350,7 @@ export async function POST(request: NextRequest) {
               date: new Date(),
               meta: {
                 set: {
-                  kbId,
+                  kbId: kbData.id,
                   textLength: text.length,
                   voice,
                   speed,
@@ -284,6 +358,7 @@ export async function POST(request: NextRequest) {
                   audioSize: cached?.length ?? 0,
                   requestPath,
                   userIdentifier,
+                  isDemo: isDemo || kbId === DEMO_KB_ID,
                   lastSeenAt: new Date().toISOString(),
                 },
               },
@@ -301,15 +376,17 @@ export async function POST(request: NextRequest) {
         textLength: text.length,
         cached: true,
         timestamp: new Date().toISOString(),
+        isDemo: isDemo || kbId === DEMO_KB_ID,
+        demoUsage: isDemo ? demoTtsUsage?.usage : undefined,
+        demoLimit: isDemo ? DEMO_TTS_LIMIT_PER_IP : undefined,
         rateLimit: {
           remaining: rateLimit.remaining,
-          reset: rateLimit.reset.toISOString(),
+          reset: rateLimit.reset.toISOString?.() || rateLimit.reset,
         },
       });
     }
 
     // Generate TTS via OpenAI (audio/speech endpoint)
-    // --------- Measure TTS response time ---------
     let ttsMs = 0;
 
     const ttsStart = Date.now();
@@ -327,8 +404,7 @@ export async function POST(request: NextRequest) {
         speed,
       }),
     });
-    ttsMs = Date.now() - ttsStart; // <--- store elapsed ms
-    // --------------------------------------------
+    ttsMs = Date.now() - ttsStart;
 
     if (!ttsResp.ok) {
       const txt = await ttsResp.text().catch(() => "");
@@ -378,10 +454,13 @@ export async function POST(request: NextRequest) {
       console.warn("Failed to cache TTS audio (non-fatal):", e);
     }
 
-    // Analytics: if kbId present and we have kbData, log interaction + upsert usage row
+    // Analytics: log interaction + upsert usage row
     if (kbId && kbData) {
       const eventId = crypto.randomUUID();
       const minutes = estimateMinutesFromText(text);
+      const userIdentifier = isDemo
+        ? "demo-user"
+        : getUserIdentifier(request, widgetPayload);
 
       try {
         await logInteraction({
@@ -390,7 +469,7 @@ export async function POST(request: NextRequest) {
           channel: "voice",
           interactions: 1,
           minutes,
-          isCorrect: true, // 👈 always mark TTS as correct
+          isCorrect: true, // always mark TTS as correct
           isNegative: false,
           isFallback: false,
           eventId,
@@ -402,6 +481,7 @@ export async function POST(request: NextRequest) {
             voice,
             speed,
             cached: false,
+            isDemo: isDemo || kbId === DEMO_KB_ID,
           },
         });
       } catch (e) {
@@ -419,7 +499,7 @@ export async function POST(request: NextRequest) {
             interactions: 1,
             minutes,
             meta: {
-              kbId,
+              kbId: kbData.id,
               textLength: text.length,
               voice,
               speed,
@@ -429,6 +509,7 @@ export async function POST(request: NextRequest) {
               responseTimeMs: ttsMs,
               requestPath,
               userIdentifier,
+              isDemo: isDemo || kbId === DEMO_KB_ID,
               correctness: {
                 isCorrect: true,
                 isNegative: false,
@@ -440,7 +521,7 @@ export async function POST(request: NextRequest) {
             date: new Date(),
             meta: {
               set: {
-                kbId,
+                kbId: kbData.id,
                 textLength: text.length,
                 voice,
                 speed,
@@ -450,6 +531,7 @@ export async function POST(request: NextRequest) {
                 responseTimeMs: ttsMs,
                 requestPath,
                 userIdentifier,
+                isDemo: isDemo || kbId === DEMO_KB_ID,
               },
             },
           },
@@ -474,9 +556,12 @@ export async function POST(request: NextRequest) {
       audioSize: audioBuffer.byteLength,
       cached: false,
       timestamp: new Date().toISOString(),
+      isDemo: isDemo || kbId === DEMO_KB_ID,
+      demoUsage: isDemo ? demoTtsUsage?.usage : undefined,
+      demoLimit: isDemo ? DEMO_TTS_LIMIT_PER_IP : undefined,
       rateLimit: {
         remaining: rateLimit.remaining,
-        reset: rateLimit.reset.toISOString(),
+        reset: rateLimit.reset.toISOString?.() || rateLimit.reset,
       },
     });
   } catch (err) {

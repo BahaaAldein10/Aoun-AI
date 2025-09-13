@@ -18,10 +18,15 @@ const MAX_PROMPT_TOKENS = Number(process.env.CHAT_MAX_CONTEXT_TOKENS ?? 3000);
 const JWT_SECRET = process.env.WIDGET_JWT_SECRET!;
 if (!JWT_SECRET) throw new Error("WIDGET_JWT_SECRET not defined");
 
-// ---------- Helpers reused from your original file ----------
+// Demo configuration
+const DEMO_KB_ID = process.env.DEMO_KB_ID!;
+const DEMO_RATE_LIMIT_PER_IP = 20; // Max demo messages per IP per day
+
+// ---------- Helpers ----------
 function sanitizeText(s: string) {
   return (s || "").toString().trim();
 }
+
 function estimateMinutesFromText(text?: string | null, wpm = 200) {
   if (!text) return 0;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -47,7 +52,46 @@ type ChatRequestBody = {
   history?: Array<{ role?: "user" | "assistant" | string; text?: string }>;
   userId?: string;
   topK?: number;
+  isDemo?: boolean; // Added for demo support
 };
+
+// Demo utility functions
+function enhanceDemoResponse(
+  response: string,
+  usage: number,
+  limit: number,
+): string {
+  const remaining = limit - usage;
+
+  if (remaining <= 3 && remaining > 0) {
+    const conversionPrompt = `\n\n💡 ${remaining} demo messages remaining. Sign up for unlimited access!`;
+    return response + conversionPrompt;
+  } else if (remaining === 0) {
+    const conversionPrompt =
+      "\n\n🚀 Demo limit reached! Sign up now for unlimited conversations and access to all features.";
+    return response + conversionPrompt;
+  }
+
+  return response;
+}
+
+async function trackDemoUsage(
+  clientIP: string,
+  cache: any,
+): Promise<{ usage: number; allowed: boolean }> {
+  const today = new Date().toDateString();
+  const demoKey = `demo_usage:${clientIP}:${today}`;
+
+  const usage = (await cache.get(demoKey)) || 0;
+  const newUsage = usage + 1;
+
+  if (newUsage > DEMO_RATE_LIMIT_PER_IP) {
+    return { usage: newUsage, allowed: false };
+  }
+
+  await cache.set(demoKey, newUsage, 86400); // 24 hours TTL
+  return { usage: newUsage, allowed: true };
+}
 
 // ---------- POST ----------
 export async function POST(req: Request) {
@@ -67,7 +111,7 @@ export async function POST(req: Request) {
   ]);
 
   const requestPath = new URL(req.url).pathname;
-  const invCtx = startInvocation(); // <--- start invocation measurement
+  const invCtx = startInvocation();
   const { CacheService, checkRateLimit, createHash, getUserIdentifier } =
     upstashModule as any;
   const upstashVector = (upstashVectorModule as any).default;
@@ -87,21 +131,49 @@ export async function POST(req: Request) {
       conversationId,
       history = [],
       topK: requestedTopK,
+      isDemo = false,
     } = body || {};
 
-    if (!kbId || !message?.trim())
+    if (!kbId || !message?.trim()) {
       return NextResponse.json(
         { error: "Missing kbId or message" },
         { status: 400 },
       );
+    }
 
-    // Widget JWT verification
+    // Demo-specific handling
+    let demoUsageData: { usage: number; allowed: boolean } | null = null;
+
+    if (isDemo || kbId === DEMO_KB_ID) {
+      const clientIP =
+        req.headers.get("x-forwarded-for")?.split(",")[0] ||
+        req.headers.get("x-real-ip") ||
+        "unknown";
+
+      demoUsageData = await trackDemoUsage(clientIP, cache);
+
+      if (!demoUsageData.allowed) {
+        return NextResponse.json(
+          {
+            error: "Demo limit reached",
+            message:
+              "You've reached the daily demo limit. Please sign up for unlimited access.",
+            limit: DEMO_RATE_LIMIT_PER_IP,
+            usage: demoUsageData.usage,
+          },
+          { status: 429 },
+        );
+      }
+    }
+
+    // Widget JWT verification (skip for demo)
     const authHeader = (req.headers.get("authorization") || "").replace(
       /^Bearer\s+/,
       "",
     );
     let widgetPayload: { kbId?: string; origin?: string } | null = null;
-    if (authHeader) {
+
+    if (authHeader && !isDemo && kbId !== DEMO_KB_ID) {
       try {
         const secretKey = new TextEncoder().encode(JWT_SECRET);
         const { payload } = await jwtVerify(authHeader, secretKey);
@@ -122,25 +194,39 @@ export async function POST(req: Request) {
       }
     }
 
-    // Rate limiting
-    const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
-    const rateLimit = await checkRateLimit(userIdentifier, "chat");
+    // Rate limiting (use demo tracking or regular rate limiting)
+    let rateLimit;
+    if (isDemo || kbId === DEMO_KB_ID) {
+      // For demo, we use our custom tracking above
+      rateLimit = {
+        success: true,
+        remaining: Math.max(
+          0,
+          DEMO_RATE_LIMIT_PER_IP - (demoUsageData?.usage || 0),
+        ),
+        reset: new Date(Date.now() + 86400000), // 24 hours from now
+      };
+    } else {
+      const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
+      rateLimit = await checkRateLimit(userIdentifier, "chat");
 
-    if (!rateLimit.success) {
-      return NextResponse.json(
-        {
-          error: "Rate limit exceeded",
-          limit: rateLimit.limit,
-          remaining: rateLimit.remaining,
-          reset: rateLimit.reset.toISOString(),
-        },
-        { status: 429 },
-      );
+      if (!rateLimit.success) {
+        return NextResponse.json(
+          {
+            error: "Rate limit exceeded",
+            limit: rateLimit.limit,
+            remaining: rateLimit.remaining,
+            reset: rateLimit.reset.toISOString(),
+          },
+          { status: 429 },
+        );
+      }
     }
 
     // Load KB
+    const targetKbId = isDemo || kbId === DEMO_KB_ID ? DEMO_KB_ID : kbId;
     const kb = await prisma.knowledgeBase.findUnique({
-      where: { id: kbId },
+      where: { id: targetKbId },
       select: {
         id: true,
         title: true,
@@ -150,11 +236,16 @@ export async function POST(req: Request) {
       },
     });
 
-    if (!kb)
+    if (!kb) {
       return NextResponse.json(
-        { error: "Knowledge base not found" },
+        {
+          error: isDemo
+            ? "Demo service unavailable"
+            : "Knowledge base not found",
+        },
         { status: 404 },
       );
+    }
 
     const kbData = {
       id: kb.id,
@@ -166,8 +257,8 @@ export async function POST(req: Request) {
 
     const metadata = kbData.metadata ?? {};
 
-    // Widget origin check if widget token used
-    if (widgetPayload) {
+    // Widget origin check (skip for demo)
+    if (widgetPayload && !isDemo) {
       const allowedOrigins = Array.isArray(metadata.allowedOrigins)
         ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
         : [];
@@ -187,8 +278,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // API key protection for private KBs
-    if (!widgetPayload) {
+    // API key protection (skip for demo)
+    if (!widgetPayload && !isDemo && kbId !== DEMO_KB_ID) {
       const storedHashHex =
         typeof metadata.apiKeyHash === "string"
           ? metadata.apiKeyHash
@@ -232,15 +323,14 @@ export async function POST(req: Request) {
 
     // Check chat cache for exact message
     const messageHash = createHash(message);
-    const cachedResponse = await cache.getChatResponse(kbId, messageHash);
+    const cacheKey = `${targetKbId}:${messageHash}`;
+    const cachedResponse = await cache.getChatResponse(targetKbId, messageHash);
 
     if (cachedResponse) {
       const minutes = estimateMinutesFromText(message);
-
-      // create an eventId for this request
       const eventId = crypto.randomUUID();
 
-      // Heuristic correctness detection (same as LLM path)
+      // Heuristic correctness detection
       const fallbackRegex =
         /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
       const isFallback =
@@ -252,7 +342,17 @@ export async function POST(req: Request) {
         !isFallback;
       const isNegative = !isCorrect;
 
-      // 1) Log to aggregated analytics + create minimal usage row via your helper
+      // Enhanced response for demo
+      let responseText = cachedResponse.text;
+      if (isDemo || kbId === DEMO_KB_ID) {
+        responseText = enhanceDemoResponse(
+          responseText,
+          demoUsageData?.usage || 0,
+          DEMO_RATE_LIMIT_PER_IP,
+        );
+      }
+
+      // Log interaction for non-demo or demo analytics
       try {
         await logInteraction({
           userId: kbData.userId,
@@ -266,17 +366,20 @@ export async function POST(req: Request) {
           eventId,
           meta: {
             requestPath,
-            userIdentifier,
+            userIdentifier: isDemo
+              ? "demo-user"
+              : getUserIdentifier(req, widgetPayload),
             promptSize: message.length,
             retrievedCount: cachedResponse.sources?.length ?? 0,
             cached: true,
+            isDemo: isDemo || kbId === DEMO_KB_ID,
           },
         });
       } catch (err) {
         console.warn("logInteraction failed (cached path):", err);
       }
 
-      // 2) Upsert the usage row to attach richer meta (promptSize, retrievedCount, cached flag, conversationId)
+      // Upsert usage row
       try {
         await prisma.usage.upsert({
           where: { eventId },
@@ -288,13 +391,16 @@ export async function POST(req: Request) {
             interactions: 1,
             minutes,
             meta: {
-              kbId,
+              kbId: targetKbId,
               conversationId: conversationId ?? null,
               cached: true,
               promptSize: message.length,
               retrievedCount: cachedResponse.sources?.length ?? 0,
               requestPath,
-              userIdentifier,
+              userIdentifier: isDemo
+                ? "demo-user"
+                : getUserIdentifier(req, widgetPayload),
+              isDemo: isDemo || kbId === DEMO_KB_ID,
               createdAt: new Date().toISOString(),
             },
           },
@@ -302,13 +408,16 @@ export async function POST(req: Request) {
             date: new Date(),
             meta: {
               set: {
-                kbId,
+                kbId: targetKbId,
                 conversationId: conversationId ?? null,
                 cached: true,
                 promptSize: message.length,
                 retrievedCount: cachedResponse.sources?.length ?? 0,
                 requestPath,
-                userIdentifier,
+                userIdentifier: isDemo
+                  ? "demo-user"
+                  : getUserIdentifier(req, widgetPayload),
+                isDemo: isDemo || kbId === DEMO_KB_ID,
                 lastSeenAt: new Date().toISOString(),
               },
             },
@@ -320,11 +429,14 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         success: true,
-        text: cachedResponse.text,
+        text: responseText,
         conversationId: conversationId ?? null,
         sources: cachedResponse.sources,
         rateLimit: { remaining: rateLimit.remaining },
         cached: true,
+        isDemo: isDemo || kbId === DEMO_KB_ID,
+        demoUsage: isDemo ? demoUsageData?.usage : undefined,
+        demoLimit: isDemo ? DEMO_RATE_LIMIT_PER_IP : undefined,
       });
     }
 
@@ -352,7 +464,7 @@ export async function POST(req: Request) {
           topK,
           includeMetadata: true,
           includeVectors: false,
-          filter: `kbId = '${kbId.replace(/'/g, "\\'")}'`,
+          filter: `kbId = '${targetKbId.replace(/'/g, "\\'")}'`,
         });
 
         retrieved = (results ?? []).map((result: any) => {
@@ -374,7 +486,7 @@ export async function POST(req: Request) {
           };
         });
       } else {
-        retrieved = await upstashSearchSimilar(kbId, message, topK);
+        retrieved = await upstashSearchSimilar(targetKbId, message, topK);
       }
     } catch (err) {
       console.error("Retrieval failed:", err);
@@ -387,13 +499,21 @@ export async function POST(req: Request) {
       return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // Build prompt
-    const personality = (metadata?.personality as string) ?? "";
+    // Build prompt with demo-specific personality
+    const demoPersonality =
+      isDemo || kbId === DEMO_KB_ID
+        ? "You are a helpful and enthusiastic AI assistant showcasing our platform's capabilities. Be conversational, informative, and occasionally mention the benefits of signing up for the full service. Keep responses concise but informative."
+        : "";
+
+    const personality =
+      demoPersonality || (metadata?.personality as string) || "";
     const systemInstruction =
       `You are an assistant answering user questions using the provided sources. ${personality}`.trim();
+
     const retrievalText = sourceBlocks.length
       ? `Use the following retrieved snippets to ground your answer:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
       : "";
+
     const historyText = history.length
       ? history
           .map(
@@ -402,6 +522,7 @@ export async function POST(req: Request) {
           )
           .join("\n") + "\n\n"
       : "";
+
     const userBlock = `User: ${sanitizeText(message)}\nAssistant:`;
     let prompt = `${systemInstruction}\n\n${retrievalText}${historyText}${userBlock}`;
 
@@ -420,18 +541,15 @@ export async function POST(req: Request) {
     const promptHash = createHash(prompt);
     let assistantText = await cache.get(`chat_llm:${promptHash}`);
 
-    let llmMs = 0; // <--- initialize
+    let llmMs = 0;
 
     if (!assistantText) {
       try {
-        // ---------------------------
-        // Measure LLM response time
-        // ---------------------------
         const llmStart = Date.now();
         const resp: any = await openai.responses.create({
           model: OPENAI_MODEL,
           input: prompt,
-          max_output_tokens: 800,
+          max_output_tokens: isDemo ? 400 : 800, // Shorter responses for demo
           temperature: 0.1,
         });
         llmMs = Date.now() - llmStart;
@@ -463,6 +581,15 @@ export async function POST(req: Request) {
       }
     }
 
+    // Enhanced response for demo
+    if (isDemo || kbId === DEMO_KB_ID) {
+      assistantText = enhanceDemoResponse(
+        assistantText || "",
+        demoUsageData?.usage || 0,
+        DEMO_RATE_LIMIT_PER_IP,
+      );
+    }
+
     // Prepare responseData and cache full response
     const responseData = {
       text: assistantText ?? "",
@@ -473,11 +600,9 @@ export async function POST(req: Request) {
       })),
     };
 
-    await cache.setChatResponse(kbId, messageHash, responseData);
+    await cache.setChatResponse(targetKbId, messageHash, responseData);
 
-    // ---------------------------
-    // Usage logging (LLM path) with responseTimeMs
-    // ---------------------------
+    // Usage logging
     const chatMinutes = estimateMinutesFromText(prompt, 200);
     const eventId = crypto.randomUUID();
 
@@ -503,16 +628,19 @@ export async function POST(req: Request) {
         meta: {
           responseTimeMs: llmMs,
           requestPath,
-          userIdentifier,
+          userIdentifier: isDemo
+            ? "demo-user"
+            : getUserIdentifier(req, widgetPayload),
           promptSize: prompt.length,
           retrievedCount: retrieved.length,
+          isDemo: isDemo || kbId === DEMO_KB_ID,
         },
       });
     } catch (err) {
       console.warn("logInteraction failed (llm path):", err);
     }
 
-    // Upsert usage row with responseTimeMs
+    // Upsert usage row
     try {
       await prisma.usage.upsert({
         where: { eventId },
@@ -524,14 +652,17 @@ export async function POST(req: Request) {
           interactions: 1,
           minutes: chatMinutes,
           meta: {
-            kbId,
+            kbId: targetKbId,
             conversationId: conversationId ?? null,
             cached: false,
             promptSize: prompt.length,
             retrievedCount: retrieved.length,
-            responseTimeMs: llmMs, // <--- attach response time
+            responseTimeMs: llmMs,
             requestPath,
-            userIdentifier,
+            userIdentifier: isDemo
+              ? "demo-user"
+              : getUserIdentifier(req, widgetPayload),
+            isDemo: isDemo || kbId === DEMO_KB_ID,
             createdAt: new Date().toISOString(),
           },
         },
@@ -539,14 +670,17 @@ export async function POST(req: Request) {
           date: new Date(),
           meta: {
             set: {
-              kbId,
+              kbId: targetKbId,
               conversationId: conversationId ?? null,
               cached: false,
               promptSize: prompt.length,
               retrievedCount: retrieved.length,
-              responseTimeMs: llmMs, // <--- attach response time
+              responseTimeMs: llmMs,
               requestPath,
-              userIdentifier,
+              userIdentifier: isDemo
+                ? "demo-user"
+                : getUserIdentifier(req, widgetPayload),
+              isDemo: isDemo || kbId === DEMO_KB_ID,
               lastSeenAt: new Date().toISOString(),
             },
           },
@@ -556,17 +690,15 @@ export async function POST(req: Request) {
       console.warn("usage upsert failed (llm path):", err);
     }
 
-    // -----------------------------
-    // record metrics for monitoring
-    // -----------------------------
+    // Record metrics for monitoring
     void recordInvocationMetrics(await invCtx, {
       llmResponseMs: llmMs,
       userId: kbData.userId,
       botId: kbData.botId,
-      tag: "chat", // you can also use "voice" or "tts" in other routes
+      tag: "chat",
     });
 
-    // Return
+    // Return response
     return NextResponse.json({
       success: true,
       text: assistantText,
@@ -574,6 +706,9 @@ export async function POST(req: Request) {
       sources: responseData.sources,
       rateLimit: { remaining: rateLimit.remaining },
       cached: false,
+      isDemo: isDemo || kbId === DEMO_KB_ID,
+      demoUsage: isDemo ? demoUsageData?.usage : undefined,
+      demoLimit: isDemo ? DEMO_RATE_LIMIT_PER_IP : undefined,
     });
   } catch (err) {
     console.error("Chat handler error:", err);
