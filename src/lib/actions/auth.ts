@@ -3,18 +3,39 @@
 import { prisma } from "@/lib/prisma";
 import { UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import z from "zod";
 import { signIn } from "../auth";
 import { getDictionary, SupportedLang } from "../dictionaries";
-import { loginSchema, signupSchema } from "../schemas/auth";
+import { generateResetPasswordEmail } from "../notifier";
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  resetPasswordSchema,
+  signupSchema,
+} from "../schemas/auth";
+import { sendTransactionalEmail } from "../sendbrevo";
 
 interface LoginUserParams {
   email: string;
   password: string;
   lang: SupportedLang;
 }
+
 interface SignupUserParams extends LoginUserParams {
   name: string;
+}
+
+interface ForgotPasswordParams {
+  email: string;
+  lang: SupportedLang;
+}
+
+interface ResetPasswordParams {
+  token: string;
+  email: string;
+  password: string;
+  lang: SupportedLang;
 }
 
 export async function loginUser({ email, password, lang }: LoginUserParams) {
@@ -90,7 +111,7 @@ export async function signupUser({
       };
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 12);
     await prisma.user.create({
       data: {
         name,
@@ -113,6 +134,103 @@ export async function signupUser({
     return { success: true };
   } catch (error) {
     console.error("[SIGNUP_ERROR]", error);
+    return {
+      success: false,
+      errors: { general: dict.auth.validation.internal_error },
+    };
+  }
+}
+
+export async function forgotPassword({ email, lang }: ForgotPasswordParams) {
+  const dict = await getDictionary(lang);
+
+  try {
+    const parsed = forgotPasswordSchema(dict).safeParse({ email });
+    if (!parsed.success) {
+      return { success: false, errors: z.flattenError(parsed.error) };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+    if (!user) {
+      return { success: true };
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 mins
+
+    await prisma.user.update({
+      where: { email },
+      data: {
+        resetToken,
+        resetTokenExpiresAt,
+      },
+    });
+
+    const resetUrl = `${process.env.NEXTAUTH_URL}/${lang}/auth/reset?token=${resetToken}`;
+    const emailHtml = generateResetPasswordEmail(user.name!, resetUrl, dict);
+
+    await sendTransactionalEmail(
+      { email: user.email, name: user.name! },
+      dict.auth.reset_password_email_subject,
+      emailHtml,
+    );
+
+    return { success: true };
+  } catch (error) {
+    console.error("[FORGOT_PASSWORD_ERROR]", error);
+    return {
+      success: false,
+      errors: { general: dict.auth.validation.internal_error },
+    };
+  }
+}
+
+export async function resetPassword({
+  token,
+  email,
+  password,
+  lang,
+}: ResetPasswordParams) {
+  const dict = await getDictionary(lang);
+
+  try {
+    const parsed = resetPasswordSchema(dict).safeParse({
+      password,
+      confirmPassword: password,
+    });
+    if (!parsed.success) {
+      return { success: false, errors: z.flattenError(parsed.error) };
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email, resetToken: token },
+    });
+    if (
+      !user ||
+      !user.resetTokenExpiresAt ||
+      user.resetTokenExpiresAt < new Date()
+    ) {
+      return {
+        success: false,
+        errors: { token: dict.auth.validation.invalid_or_expired_token },
+      };
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    await prisma.user.update({
+      where: { email },
+      data: {
+        password: hashedPassword,
+        resetToken: null,
+        resetTokenExpiresAt: null,
+      },
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("[RESET_PASSWORD_ERROR]", error);
     return {
       success: false,
       errors: { general: dict.auth.validation.internal_error },

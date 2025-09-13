@@ -16,10 +16,11 @@ import { loginUser } from "@/lib/actions/auth";
 import { SupportedLang } from "@/lib/dictionaries";
 import { LoginFormValues, loginSchema } from "@/lib/schemas/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { CheckCircle } from "lucide-react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import Spinner from "../shared/Spinner";
 
@@ -34,12 +35,14 @@ interface LoginFormProps {
     no_account: string;
     signup_link: string;
     back_to_home: string;
+    password_reset_success: string;
   };
   lang: SupportedLang;
 }
 
 const LoginForm = ({ t, lang }: LoginFormProps) => {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const dict = useDictionary();
 
   const form = useForm<LoginFormValues>({
@@ -54,13 +57,19 @@ const LoginForm = ({ t, lang }: LoginFormProps) => {
     formState: { isSubmitting },
   } = form;
   const [generalError, setGeneralError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [activeProvider, setActiveProvider] = useState<
     "google" | "facebook" | null
   >(null);
 
-  // const handleForgotPassword = () => {
-  //   router.push(`/${lang}/forgot-password`);
-  // };
+  // Check for reset success message
+  useEffect(() => {
+    if (searchParams.get("reset") === "success") {
+      setSuccessMessage(t.password_reset_success);
+      // Clear the URL parameter
+      router.replace(`/${lang}/auth/login`);
+    }
+  }, [searchParams, t.password_reset_success, router, lang]);
 
   const handleProviderLogin = async (provider: "google" | "facebook") => {
     try {
@@ -73,6 +82,7 @@ const LoginForm = ({ t, lang }: LoginFormProps) => {
 
   async function onSubmit(data: LoginFormValues) {
     setGeneralError(null);
+    setSuccessMessage(null);
     clearErrors();
 
     try {
@@ -107,6 +117,15 @@ const LoginForm = ({ t, lang }: LoginFormProps) => {
         className="w-full max-w-md space-y-6"
       >
         <input type="hidden" name="lang" value={lang} />
+
+        {/* Success message */}
+        {successMessage && (
+          <div className="mb-2 flex items-center rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+            <CheckCircle className="mr-2 h-4 w-4" />
+            {successMessage}
+          </div>
+        )}
+
         {/* General error message */}
         {generalError && (
           <div className="mb-2 text-sm text-red-500">{generalError}</div>

@@ -106,6 +106,9 @@ model User {
 
   stripeCustomerId String?
 
+  resetToken          String?
+  resetTokenExpiresAt DateTime?
+
   accounts       Account[]
   sessions       Session[]
   bots           Bot[]
@@ -183,7 +186,7 @@ model Bot {
 model KnowledgeBase {
   id          String      @id @default(auto()) @map("_id") @db.ObjectId
   userId      String      @db.ObjectId
-  botId       String     @db.ObjectId
+  botId       String      @db.ObjectId
   title       String
   description String?
   documents   Document[]

@@ -33,3 +33,33 @@ export const signupSchema = (dict: Dictionary) =>
   });
 
 export type SignupFormValues = z.infer<ReturnType<typeof signupSchema>>;
+
+export const forgotPasswordSchema = (dict: Dictionary) =>
+  z.object({
+    email: z.email({ message: dict.auth.validation.email }),
+  });
+
+export type ForgotPasswordFormValues = z.infer<
+  ReturnType<typeof forgotPasswordSchema>
+>;
+
+export const resetPasswordSchema = (dict: Dictionary) =>
+  z
+    .object({
+      password: z
+        .string()
+        .min(6, { message: dict.auth.validation.passwordMin })
+        .max(100, { message: dict.auth.validation.passwordMax })
+        .regex(/[A-Z]/, { message: dict.auth.validation.passwordUpper })
+        .regex(/[a-z]/, { message: dict.auth.validation.passwordLower })
+        .regex(/[0-9]/, { message: dict.auth.validation.passwordNumber }),
+      confirmPassword: z.string(),
+    })
+    .refine((val) => val.password === val.confirmPassword, {
+      message: dict.auth.validation.password_mismatch,
+      path: ["confirmPassword"],
+    });
+
+export type ResetPasswordFormValues = z.infer<
+  ReturnType<typeof resetPasswordSchema>
+>;

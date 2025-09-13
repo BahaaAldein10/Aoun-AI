@@ -134,8 +134,38 @@
       "invalid_password": "Incorrect password",
       "email_in_use": "Email already in use",
       "internal_error": "Internal server error",
-      "auth_error": "An unexpected error occurred. Please try again."
-    }
+      "auth_error": "An unexpected error occurred. Please try again.",
+      "password_mismatch": "Passwords do not match",
+      "invalid_or_expired_token": "This reset token is invalid or has expired. Please request a new password reset."
+    },
+    "forgot_password_title": "Forgot Password",
+    "forgot_password_desc": "Enter your email address and we'll send you a reset link",
+    "send_reset_link": "Send Reset Link",
+    "sending": "Sending...",
+    "back_to_login": "Back to Login",
+    "reset_email_sent_title": "Check Your Email",
+    "reset_email_sent_message": "If an account with that email exists, we've sent you a password reset link.",
+
+    "reset_password_title": "Reset Password",
+    "reset_password_desc": "Enter your new password below",
+    "new_password": "New Password",
+    "confirm_password": "Confirm Password",
+    "reset_password": "Reset Password",
+    "resetting": "Resetting...",
+    "password_reset_success": "Your password has been successfully reset. You can now log in with your new password.",
+
+    "invalid_reset_link_title": "Invalid Reset Link",
+    "invalid_reset_link_desc": "This password reset link is invalid or has expired.",
+    "request_new_reset_link": "Request a new reset link",
+
+    "reset_password_email_subject": "Reset Your Password",
+    "reset_password_email_title": "Password Reset Request",
+    "reset_password_email_greeting": "Hi",
+    "reset_password_email_message": "You requested to reset your password. Click the button below to create a new password:",
+    "reset_password_button": "Reset Password",
+    "reset_password_email_expire_note": "This link will expire in 15 minutes for security reasons.",
+    "reset_password_email_ignore_note": "If you didn't request this password reset, you can safely ignore this email.",
+    "reset_password_email_footer": "This email was sent by our automated system. Please do not reply to this email."
   },
   "dashboard_layout": {
     "dashboard": "Dashboard",
@@ -1296,6 +1326,14 @@
     "admin": {
       "title": "Admin Panel | Aoun",
       "description": "Access the Aoun admin panel to manage users, bots, leads, and system settings."
+    },
+    "forgot_password": {
+      "title": "Forgot Password | Aoun",
+      "description": "Reset your password to regain access to your account"
+    },
+    "reset_password": {
+      "title": "Reset Password | Aoun",
+      "description": "Create a new password for your account"
     }
   },
   "blog": {
