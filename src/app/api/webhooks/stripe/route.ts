@@ -125,7 +125,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  // Idempotency: skip if processed
   if (await isEventProcessed(event.id)) {
     console.log(`Skipping already processed event ${event.id}`);
     return NextResponse.json({ received: true }, { status: 200 });
@@ -137,7 +136,6 @@ export async function POST(req: Request) {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        // If session.subscription is a string id, retrieve the subscription
         const stripeSubscriptionId =
           typeof session.subscription === "string"
             ? session.subscription
@@ -173,7 +171,6 @@ export async function POST(req: Request) {
               })()
             : extractSubscriptionPeriod(subscription);
 
-        // Find user by session.customer or session.metadata
         const stripeCustomerId =
           typeof session.customer === "string" ? session.customer : null;
         let user = null;
@@ -193,14 +190,12 @@ export async function POST(req: Request) {
           break;
         }
 
-        // Resolve planId robustly
         const planId = await resolvePlanIdFromStripeSubscription(subscription);
         if (!planId) {
           console.warn("No planId resolved for subscription", subscription.id);
           break;
         }
 
-        // Cancel any other active subscriptions (safety)
         await prisma.subscription.updateMany({
           where: {
             userId: user.id,
@@ -210,7 +205,6 @@ export async function POST(req: Request) {
           data: { status: "CANCELED" },
         });
 
-        // Upsert subscription record
         await prisma.subscription.upsert({
           where: { stripeSubscriptionId },
           update: {
@@ -235,7 +229,6 @@ export async function POST(req: Request) {
 
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
-        // Avoid duplicate payments
         if (invoice.id) {
           const existing = await prisma.payment.findFirst({
             where: { providerPaymentId: invoice.id },
@@ -286,7 +279,6 @@ export async function POST(req: Request) {
         });
 
         if (subscriptionId) {
-          // Extract period from invoice lines if possible
           let currentPeriodStart: Date | null = null;
           let currentPeriodEnd: Date | null = null;
           if (invoice.lines?.data?.[0]?.period) {
@@ -320,7 +312,6 @@ export async function POST(req: Request) {
             ? subscription.customer
             : null;
 
-        // Find user
         let user = null;
         if (subscription.metadata?.userId) {
           user = await prisma.user.findUnique({

@@ -21,6 +21,7 @@ function formatMonthLabel(date: Date, lang: SupportedLang) {
 const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
   const { lang } = await params;
   const { dict } = await getLangAndDict(params);
+  const isRtl = lang === "ar";
 
   const now = new Date();
   const startDate = new Date(
@@ -58,7 +59,15 @@ const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
       orderBy: { createdAt: "desc" },
       include: {
         user: { select: { id: true, name: true, email: true, image: true } },
-        plan: { select: { id: true, title: true, price: true } },
+        plan: {
+          select: {
+            id: true,
+            titleAr: true,
+            titleEn: true,
+            priceAr: true,
+            priceEn: true,
+          },
+        },
       },
       where: {
         status: {
@@ -139,7 +148,11 @@ const AdminOverviewPage = async ({ params }: AdminOverviewPageProps) => {
         }
       : null,
     plan: s.plan
-      ? { id: s.plan.id, title: s.plan.title, price: s.plan.price }
+      ? {
+          id: s.plan.id,
+          title: isRtl ? s.plan.titleAr : s.plan.titleEn,
+          price: isRtl ? s.plan.priceAr : s.plan.priceEn,
+        }
       : null,
     status: s.status,
     createdAt: s.createdAt.toISOString(),

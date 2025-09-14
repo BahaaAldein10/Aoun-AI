@@ -43,12 +43,13 @@ export default function CheckoutButton({
           : "You must be logged in to subscribe.",
       );
       return;
-    };
+    }
 
     setLoading(true);
 
     try {
-      const response = await fetch("/api/stripe/create-checkout-session", {
+      // Updated API call - still pass lang for success/cancel URLs but not for plan lookup
+      const response = await fetch("/api/stripe/create-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ planId, lang }),
@@ -65,7 +66,12 @@ export default function CheckoutButton({
         window.location.href = data.url;
       } else {
         // Show success message for free plan or immediate actions
-        toast.success(data.message || "Plan updated successfully!");
+        toast.success(
+          data.message ||
+            (lang === "ar"
+              ? "تم تحديث الخطة بنجاح!"
+              : "Plan updated successfully!"),
+        );
         // Optionally reload the page to show updated state
         setTimeout(() => {
           window.location.reload();
@@ -74,7 +80,11 @@ export default function CheckoutButton({
     } catch (error) {
       console.error("Checkout error:", error);
       toast.error(
-        error instanceof Error ? error.message : "Something went wrong",
+        error instanceof Error
+          ? error.message
+          : lang === "ar"
+            ? "حدث خطأ ما"
+            : "Something went wrong",
       );
     } finally {
       setLoading(false);

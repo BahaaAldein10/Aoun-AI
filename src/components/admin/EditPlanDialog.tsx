@@ -58,14 +58,18 @@ export default function EditPlanDialog({
     resolver: zodResolver(planSchema),
     defaultValues: {
       name: "FREE",
-      title: "",
-      description: "",
-      price: "",
+      titleEn: "",
+      titleAr: "",
+      descriptionEn: "",
+      descriptionAr: "",
+      priceEn: "",
+      priceAr: "",
       priceAmount: null,
       interval: "month",
       minutesPerMonth: 0,
       agents: 0,
-      features: [],
+      featuresEn: [],
+      featuresAr: [],
       popular: false,
     },
     mode: "onSubmit",
@@ -82,14 +86,18 @@ export default function EditPlanDialog({
     if (plan) {
       reset({
         name: plan.name as PlanName,
-        title: plan.title ?? "",
-        description: plan.description ?? "",
-        price: plan.price ?? "",
-        priceAmount: plan.priceAmount ?? null,
+        titleEn: plan.titleEn ?? "",
+        titleAr: plan.titleAr ?? "",
+        descriptionEn: plan.descriptionEn ?? "",
+        descriptionAr: plan.descriptionAr ?? "",
+        priceEn: plan.priceEn ?? "",
+        priceAr: plan.priceAr ?? "",
+        priceAmount: plan.priceAmount ? plan.priceAmount / 100 : null,
         interval: plan.interval ?? "month",
         minutesPerMonth: plan.minutesPerMonth ?? 0,
         agents: plan.agents ?? 0,
-        features: plan.features ?? [],
+        featuresEn: plan.featuresEn ?? [],
+        featuresAr: plan.featuresAr ?? [],
         popular: plan.popular ?? false,
       });
     }
@@ -98,14 +106,23 @@ export default function EditPlanDialog({
   const [newFeature, setNewFeature] = useState("");
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState("");
-  const currentFeatures = watch("features") || [];
+  const currentFeatures = isRtl ? watch("featuresAr") : watch("featuresEn");
 
   async function onSubmit(values: PlanFormValues) {
     if (!plan?.id) return;
 
     try {
       setLoading(true);
-      await updatePlan({ id: plan.id, data: values, lang });
+      await updatePlan({
+        id: plan.id,
+        data: {
+          ...values,
+          priceAmount: values.priceAmount
+            ? Math.round(values.priceAmount * 100) // dollars → cents
+            : null,
+        },
+        lang,
+      });
       toast.success(t.toast_updated || "Plan updated");
       onClose();
     } catch (err) {
@@ -126,13 +143,13 @@ export default function EditPlanDialog({
       return;
     }
 
-    setValue("features", [...currentFeatures, f]);
+    setValue(isRtl ? "featuresAr" : "featuresEn", [...currentFeatures, f]);
     setNewFeature("");
   }
 
   function handleRemoveFeature(index: number) {
     const updatedFeatures = currentFeatures.filter((_, i) => i !== index);
-    setValue("features", updatedFeatures);
+    setValue(isRtl ? "featuresAr" : "featuresEn", updatedFeatures);
   }
 
   function handleStartEdit(index: number) {
@@ -161,7 +178,7 @@ export default function EditPlanDialog({
 
     const updatedFeatures = [...currentFeatures];
     updatedFeatures[editingIndex] = trimmedValue;
-    setValue("features", updatedFeatures);
+    setValue(isRtl ? "featuresAr" : "featuresEn", updatedFeatures);
 
     setEditingIndex(null);
     setEditingValue("");
@@ -206,17 +223,7 @@ export default function EditPlanDialog({
                   <FormControl>
                     <Input
                       {...field}
-                      value={
-                        field.value === "FREE"
-                          ? t.free
-                          : field.value === "STARTER"
-                            ? t.starter
-                            : field.value === "PRO"
-                              ? t.pro
-                              : field.value === "ENTERPRISE"
-                                ? t.enterprise
-                                : field.value
-                      }
+                      value={field.value}
                       readOnly
                       autoFocus={false}
                       className="aria-invalid:border-input select-none aria-invalid:ring-0 dark:aria-invalid:ring-0"
@@ -228,69 +235,124 @@ export default function EditPlanDialog({
             />
 
             {/* title */}
-            <FormField
-              control={form.control}
-              name="title"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t.fields_title ?? "Title"}</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {isRtl ? (
+              <FormField
+                control={form.control}
+                name="titleAr"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t.fields_title ?? "Title"}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ) : (
+              <FormField
+                control={form.control}
+                name="titleEn"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t.fields_title ?? "Title"}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* description */}
-            <FormField
-              control={form.control}
-              name="description"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t.fields_description ?? "Description"}</FormLabel>
-                  <FormControl>
-                    <Textarea {...field} rows={3} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {isRtl ? (
+              <FormField
+                control={form.control}
+                name="descriptionAr"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t.fields_description ?? "Description"}
+                    </FormLabel>
+                    <FormControl>
+                      <Textarea {...field} rows={3} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ) : (
+              <FormField
+                control={form.control}
+                name="descriptionEn"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t.fields_description ?? "Description"}
+                    </FormLabel>
+                    <FormControl>
+                      <Textarea {...field} rows={3} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* price (human readable) */}
-            <FormField
-              control={form.control}
-              name="price"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t.fields_price ?? "Price (display)"}</FormLabel>
-                  <FormControl>
-                    <Input {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {isRtl ? (
+              <FormField
+                control={form.control}
+                name="priceAr"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t.fields_price ?? "Price (display)"}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ) : (
+              <FormField
+                control={form.control}
+                name="priceEn"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t.fields_price ?? "Price (display)"}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
-            {/* priceAmount (cents) */}
+            {/* priceAmount (USD) */}
             <FormField
               control={form.control}
               name="priceAmount"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    {t.fields_price_amount ?? "Price amount (cents)"}
+                    {t.fields_price_amount ?? "Price amount (USD)"}
                   </FormLabel>
                   <FormControl>
                     <Input
                       type="number"
+                      step="0.01" // allow decimals
                       min={0}
                       {...field}
                       value={field.value ?? ""}
                       onChange={(e) =>
                         setValue(
                           "priceAmount",
-                          e.target.value === "" ? null : Number(e.target.value),
+                          e.target.value === ""
+                            ? null
+                            : parseFloat(e.target.value),
                         )
                       }
                     />

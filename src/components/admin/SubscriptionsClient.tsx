@@ -54,7 +54,7 @@ const SubscriptionsClient = ({
 
     for (const s of dataToExport) {
       const planName = s.plan?.name ?? "";
-      const planPrice = s.plan?.priceAmount ?? 0;
+      const planPrice = (s.plan?.priceAmount ?? 0) / 100;
       const planInterval = s.plan?.interval ?? "";
 
       const line = [

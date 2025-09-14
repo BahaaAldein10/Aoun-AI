@@ -7,7 +7,7 @@ import Stripe from "stripe";
  * Resolution order:
  *  1) subscription.metadata.planId
  *  2) first subscription item price id -> prisma.plan.stripePriceId
- *  3) subscription.metadata.planName + planLang -> composite lookup
+ *  3) subscription.metadata.planName -> lookup by name only (no lang)
  *  4) existing local subscription row that matches stripeSubscriptionId
  */
 export async function resolvePlanIdFromStripeSubscription(
@@ -34,12 +34,11 @@ export async function resolvePlanIdFromStripeSubscription(
     if (p) return p.id;
   }
 
-  // 3) metadata.planName + planLang
+  // 3) metadata.planName only (no longer need lang)
   const planName = subscription.metadata?.planName as PlanName | undefined;
-  const planLang = subscription.metadata?.planLang as string | undefined;
-  if (planName && planLang) {
+  if (planName) {
     const p = await prisma.plan.findUnique({
-      where: { name_lang: { name: planName, lang: planLang } },
+      where: { name: planName }, // Simple unique lookup by name
     });
     if (p) return p.id;
   }

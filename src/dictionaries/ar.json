@@ -775,7 +775,7 @@
     "fields_title": "العنوان",
     "fields_description": "الوصف",
     "fields_price": "السعر (للعرض)",
-    "fields_price_amount": "مقدار السعر (سنت)",
+    "fields_price_amount": "مقدار السعر (دولار)",
     "fields_interval": "الفترة",
     "fields_interval_placeholder": "شهر / سنة",
     "fields_minutes_per_month": "دقائق شهريًا",

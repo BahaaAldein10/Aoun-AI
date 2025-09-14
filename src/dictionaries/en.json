@@ -774,7 +774,7 @@
     "fields_title": "Title",
     "fields_description": "Description",
     "fields_price": "Price (display)",
-    "fields_price_amount": "Price amount (cents)",
+    "fields_price_amount": "Price amount (USD)",
     "fields_interval": "Interval",
     "fields_interval_placeholder": "month / year",
     "fields_minutes_per_month": "Minutes per month",

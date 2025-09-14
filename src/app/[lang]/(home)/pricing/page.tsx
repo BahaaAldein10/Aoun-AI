@@ -32,6 +32,8 @@ const PricingPage = async ({ params }: Props) => {
   const { lang, dict } = await getLangAndDict(params);
   const t = dict.pricing;
 
+  const isRtl = lang === "ar";
+
   const session = await auth();
   let currentSubscription = null;
 
@@ -54,7 +56,6 @@ const PricingPage = async ({ params }: Props) => {
   }
 
   const plans = await prisma.plan.findMany({
-    where: { lang },
     orderBy: { priceAmount: "asc" },
   });
 
@@ -123,7 +124,9 @@ const PricingPage = async ({ params }: Props) => {
                   <p className="inline-flex flex-wrap items-center gap-1">
                     {t.currentlyOn}{" "}
                     <span className="text-foreground font-medium">
-                      {currentSubscription.plan.title}
+                      {isRtl
+                        ? currentSubscription.plan.titleAr
+                        : currentSubscription.plan.titleEn}
                     </span>
                     {" - "}
                     {t.renewsOn}{" "}
@@ -179,25 +182,33 @@ const PricingPage = async ({ params }: Props) => {
                   ) : null}
 
                   <CardHeader className="rtl:text-right">
-                    <CardTitle className="text-2xl">{plan.title}</CardTitle>
-                    <CardDescription>{plan.description}</CardDescription>
+                    <CardTitle className="text-2xl">
+                      {isRtl ? plan.titleAr : plan.titleEn}
+                    </CardTitle>
+                    <CardDescription>
+                      {isRtl ? plan.descriptionAr : plan.descriptionEn}
+                    </CardDescription>
                   </CardHeader>
 
                   <CardContent className="flex-grow rtl:text-right">
                     <div className="mb-6 flex items-baseline rtl:flex-row-reverse rtl:justify-end">
-                      <span className="text-4xl font-bold">{plan.price}</span>
+                      <span className="text-4xl font-bold">
+                        {isRtl ? plan.priceAr : plan.priceEn}
+                      </span>
                     </div>
 
                     <ul className="space-y-3">
-                      {plan.features.map((feature, index) => (
-                        <li
-                          key={index}
-                          className="flex items-center gap-2 rtl:space-x-reverse"
-                        >
-                          <Check className="h-4 w-4" />
-                          <span>{feature}</span>
-                        </li>
-                      ))}
+                      {(isRtl ? plan.featuresAr : plan.featuresEn).map(
+                        (feature, index) => (
+                          <li
+                            key={index}
+                            className="flex items-center gap-2 rtl:space-x-reverse"
+                          >
+                            <Check className="h-4 w-4" />
+                            <span>{feature}</span>
+                          </li>
+                        ),
+                      )}
                     </ul>
                   </CardContent>
 

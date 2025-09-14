@@ -34,6 +34,8 @@ const PricingClient = ({
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const isRtl = lang === "ar";
+
   const togglePopular = async (id: string) => {
     try {
       setLoading(true);
@@ -74,7 +76,7 @@ const PricingClient = ({
               <CardHeader className="flex items-start justify-between">
                 <div>
                   <CardTitle className="flex items-center gap-2">
-                    {plan.title}
+                    {isRtl ? plan.titleAr : plan.titleEn}
                     {plan.popular && (
                       <Badge variant="default">
                         {t.popular_badge ?? "Popular"}
@@ -82,16 +84,18 @@ const PricingClient = ({
                     )}
                   </CardTitle>
                   <div className="text-muted-foreground mt-2 text-sm">
-                    {plan.description}
+                    {isRtl ? plan.descriptionAr : plan.descriptionEn}
                   </div>
                 </div>
                 {plan.popular && <Star className="text-yellow-400" />}
               </CardHeader>
 
               <CardContent>
-                <div className="mb-3 text-2xl font-bold">{plan.price}</div>
+                <div className="mb-3 text-2xl font-bold">
+                  {isRtl ? plan.priceAr : plan.priceEn}
+                </div>
                 <ul className="space-y-2 text-sm">
-                  {plan.features.map((f, i) => (
+                  {(isRtl ? plan.featuresAr : plan.featuresEn).map((f, i) => (
                     <li key={i} className="flex items-start gap-2">
                       <span className="text-muted-foreground">•</span>
                       <span>{f}</span>

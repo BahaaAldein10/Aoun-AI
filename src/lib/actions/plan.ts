@@ -27,10 +27,7 @@ export async function createPlan(params: {
 
     const existingPlan = await prisma.plan.findUnique({
       where: {
-        name_lang: {
-          name: data.name,
-          lang: lang,
-        },
+        name: data.name,
       },
     });
 
@@ -41,7 +38,6 @@ export async function createPlan(params: {
     const plan = await prisma.plan.create({
       data: {
         ...data,
-        lang,
       },
     });
 

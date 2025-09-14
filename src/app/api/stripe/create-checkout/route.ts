@@ -44,22 +44,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Plan not found" }, { status: 404 });
     }
 
-    if (targetPlan.lang !== lang) {
-      return NextResponse.json(
-        { error: "Plan language mismatch" },
-        { status: 400 },
-      );
-    }
-
-    // FREE plan handling (unchanged behavior, but documented)
+    // FREE plan handling
     if (targetPlan.name === "FREE") {
       const currentSubscription = user.subscriptions[0];
       if (currentSubscription?.stripeSubscriptionId) {
-        // cancel immediately OR set cancel_at_period_end = true depending on your policy
         await stripe.subscriptions.update(
           currentSubscription.stripeSubscriptionId,
           {
-            cancel_at_period_end: true, // change to immediate cancel by using stripe.subscriptions.del(...)
+            cancel_at_period_end: true,
           },
         );
 
@@ -79,7 +71,13 @@ export async function POST(request: Request) {
         },
       });
 
-      return NextResponse.json({ url: null, message: "Switched to free plan" });
+      return NextResponse.json({
+        url: null,
+        message:
+          lang === "ar"
+            ? "تم التبديل إلى الخطة المجانية"
+            : "Switched to free plan",
+      });
     }
 
     // Paid plan: require a stripePriceId
@@ -107,12 +105,10 @@ export async function POST(request: Request) {
       });
     }
 
-    // Build subscription_data.metadata to persist useful fallbacks
     const subscriptionMetadata = {
       userId: user.id,
       planId: targetPlan.id,
       planName: targetPlan.name,
-      planLang: targetPlan.lang,
     };
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {

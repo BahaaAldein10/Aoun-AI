@@ -349,7 +349,7 @@ export default function WidgetFrame() {
       };
       pushMessage(botMsg);
 
-      if (audioEnabled) {
+      if (audioEnabled && mode === "voice") {
         generateTTS(reply, botMsg.id);
       }
     } catch (error) {
@@ -376,6 +376,7 @@ export default function WidgetFrame() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
         body: JSON.stringify({
           text,

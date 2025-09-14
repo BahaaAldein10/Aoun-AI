@@ -11,9 +11,6 @@ const AdminPricingPage = async ({ params }: PageProps) => {
   const { lang, dict } = await getLangAndDict(params);
 
   const plans = (await prisma.plan.findMany({
-    where: {
-      lang,
-    },
     orderBy: {
       priceAmount: "asc",
     },
