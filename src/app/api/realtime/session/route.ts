@@ -68,7 +68,8 @@ Always ground your responses in the retrieved context and be helpful while encou
 
 If you don't have specific information, politely explain that this is a demo and the full version would have access to their custom knowledge base content.`;
 
-      const model = process.env.OPENAI_REALTIME_MODEL || "gpt-4o-mini-realtime";
+      const model =
+        process.env.OPENAI_REALTIME_MODEL || "gpt-4o-mini-realtime-preview";
 
       // Demo session config with shorter duration and limits
       const demoSessionConfig = {
@@ -195,7 +196,8 @@ If you don't have relevant information in the knowledge base to answer a questio
 
 Be conversational and natural in your responses while maintaining accuracy to the source material.`;
 
-    const model = process.env.OPENAI_REALTIME_MODEL || "gpt-4o-mini-realtime";
+    const model =
+      process.env.OPENAI_REALTIME_MODEL || "gpt-4o-mini-realtime-preview";
 
     // Create session config with KB context
     const sessionConfig = {
