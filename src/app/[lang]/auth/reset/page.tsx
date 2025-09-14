@@ -35,7 +35,7 @@ const ResetPasswordPage = async ({ params, searchParams }: Props) => {
   const session = await auth();
   const user = session?.user;
 
-  if (!user) return redirect(`/${lang}`);
+  if (user) return redirect(`/${lang}`);
 
   if (!token) {
     return (
@@ -80,7 +80,6 @@ const ResetPasswordPage = async ({ params, searchParams }: Props) => {
             t={t}
             lang={lang}
             token={token}
-            email={user?.email as string}
           />
         </CardContent>
       </Card>

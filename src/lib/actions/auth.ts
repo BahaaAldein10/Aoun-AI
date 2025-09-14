@@ -33,7 +33,6 @@ interface ForgotPasswordParams {
 
 interface ResetPasswordParams {
   token: string;
-  email: string;
   password: string;
   lang: SupportedLang;
 }
@@ -189,7 +188,6 @@ export async function forgotPassword({ email, lang }: ForgotPasswordParams) {
 
 export async function resetPassword({
   token,
-  email,
   password,
   lang,
 }: ResetPasswordParams) {
@@ -204,8 +202,8 @@ export async function resetPassword({
       return { success: false, errors: z.flattenError(parsed.error) };
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email, resetToken: token },
+    const user = await prisma.user.findFirst({
+      where: { resetToken: token },
     });
     if (
       !user ||
@@ -220,7 +218,7 @@ export async function resetPassword({
 
     const hashedPassword = await bcrypt.hash(password, 12);
     await prisma.user.update({
-      where: { email },
+      where: { id: user.id },
       data: {
         password: hashedPassword,
         resetToken: null,

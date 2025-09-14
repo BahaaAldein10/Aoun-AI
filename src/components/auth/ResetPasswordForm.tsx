@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useDictionary } from "@/contexts/dictionary-context";
-import { resetPassword } from "@/lib/actions/auth";
 import { SupportedLang } from "@/lib/dictionaries";
 import {
   ResetPasswordFormValues,
@@ -23,6 +22,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import Spinner from "../shared/Spinner";
+import { resetPassword } from "@/lib/actions/auth";
 
 interface ResetPasswordFormProps {
   t: {
@@ -34,14 +34,12 @@ interface ResetPasswordFormProps {
   };
   lang: SupportedLang;
   token: string;
-  email: string;
 }
 
 const ResetPasswordForm = ({
   t,
   lang,
   token,
-  email,
 }: ResetPasswordFormProps) => {
   const dict = useDictionary();
   const router = useRouter();
@@ -66,7 +64,6 @@ const ResetPasswordForm = ({
     try {
       const res = await resetPassword({
         token,
-        email,
         password: data.password,
         lang,
       });
