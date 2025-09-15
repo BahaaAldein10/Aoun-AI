@@ -15,7 +15,7 @@
   const container = hostContainer || document.body;
 
   // create iframe
-  const widgetHost = "https://aoun-ai.vercel.app";
+  const widgetHost = "https://aoun.cx";
   const iframe = document.createElement("iframe");
   iframe.src = `${widgetHost}/widget/frame?kbid=${encodeURIComponent(kbId)}`;
   iframe.allow = "clipboard-read; clipboard-write; microphone; autoplay";

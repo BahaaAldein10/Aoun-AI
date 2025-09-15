@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const EXTERNAL_DATA_URL = "https://aoun-ai.vercel.app/";
+const EXTERNAL_DATA_URL = "https://aoun.cx/";
 
 function generateSiteMap() {
   return `<?xml version="1.0" encoding="UTF-8"?>

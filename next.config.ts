@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
           // ❌ Do not set X-Frame-Options (invalid ALLOWALL)
           {
             key: "Content-Security-Policy",
-            value: "frame-ancestors * https://aoun-ai.vercel.app", // allow embedding everywhere
+            value: "frame-ancestors * https://aoun.cx", // allow embedding everywhere
           },
         ],
       },
