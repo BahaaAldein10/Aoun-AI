@@ -1,14 +1,14 @@
-import DeployClient from "@/components/dashboard/DeployClient";
+import DeployListClient from "@/components/dashboard/DeployListClient";
 import { auth } from "@/lib/auth";
-import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
+import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 
-type DeployPageProps = {
+type DeployListPageProps = {
   params: Promise<{ lang: SupportedLang }>;
 };
 
-const DeployPage = async ({ params }: DeployPageProps) => {
+const DeployListPage = async ({ params }: DeployListPageProps) => {
   const { lang, dict } = await getLangAndDict(params);
 
   const session = await auth();
@@ -18,14 +18,32 @@ const DeployPage = async ({ params }: DeployPageProps) => {
     return redirect(`/${lang}/auth/login`);
   }
 
-  const kb = await prisma.knowledgeBase.findFirst({
-    where: {
-      userId,
+  // Get all user's knowledge bases with document and embedding counts
+  const knowledgeBases = await prisma.knowledgeBase.findMany({
+    where: { userId },
+    include: {
+      documents: {
+        select: { id: true }, // Just count documents
+      },
+      embeddings: {
+        select: { id: true }, // Just count embeddings
+      },
     },
-    select: { id: true },
+    orderBy: { createdAt: "desc" },
   });
 
-  return <DeployClient lang={lang} dict={dict} kbId={kb?.id} />;
+  // Transform data to include counts and remove the full arrays
+  const kbsWithCounts = knowledgeBases.map((kb) => ({
+    ...kb,
+    documentCount: kb.documents.length,
+    embeddingCount: kb.embeddings.length,
+    documents: undefined, // Remove the full documents array
+    embeddings: undefined, // Remove the full embeddings array
+  }));
+
+  return (
+    <DeployListClient knowledgeBases={kbsWithCounts} lang={lang} dict={dict} />
+  );
 };
 
-export default DeployPage;
+export default DeployListPage;

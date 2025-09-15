@@ -213,17 +213,16 @@ export async function updateKb(params: CreateKbParams) {
   }
 }
 
-export async function deleteKb(userId: string) {
+export async function deleteKb(kbId: string) {
   try {
-    const existingKb = await prisma.knowledgeBase.findFirst({
-      where: { userId },
+    const existingKb = await prisma.knowledgeBase.findUnique({
+      where: { id: kbId },
     });
     if (!existingKb) throw new Error("Knowledge Base not found");
 
     await prisma.knowledgeBase.delete({
       where: {
         id: existingKb.id,
-        userId,
       },
     });
   } catch (error) {

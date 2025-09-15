@@ -46,6 +46,7 @@ import Spinner from "../shared/Spinner";
 import { KbMetadata } from "./KnowledgeBaseClient";
 import VoiceIntegrationTab, { availableVoices } from "./VoiceIntegrationTab";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { useRouter } from "next/navigation";
 
 type initialKb = KnowledgeBase & {
   documents: Document[];
@@ -62,8 +63,8 @@ const SetupClient = ({
   dict,
   currentUserId,
 }: {
-  initialKb: initialKb | null;
-  hasKb: boolean;
+  initialKb?: initialKb | null;
+  hasKb?: boolean;
   lang: SupportedLang;
   dict: Dictionary;
   currentUserId: string;
@@ -71,6 +72,7 @@ const SetupClient = ({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const router = useRouter();
 
   const t = dict.dashboard_setup;
   const websiteDataRef = useRef<HTMLInputElement | null>(null);
@@ -302,6 +304,7 @@ const SetupClient = ({
           title: values.botName,
           description: values.botDescription,
         });
+        router.push(`/${lang}/dashboard/knowledge-base/${res.kb.id}`);
         toast.success(t.kb_updated);
       } else {
         // Create new knowledge base
@@ -310,6 +313,7 @@ const SetupClient = ({
           title: values.botName,
           description: values.botDescription,
         });
+        router.push(`/${lang}/dashboard/knowledge-base/${res.kb.id}`);
         toast.success(t.kb_created);
       }
 

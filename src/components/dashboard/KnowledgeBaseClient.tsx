@@ -44,7 +44,7 @@ export type KbMetadata = {
 } | null;
 
 type KnowledgeBaseClientProps = {
-  initialKb: initialKb | null;
+  initialKb: initialKb;
   lang: SupportedLang;
   dict: Dictionary;
 };
@@ -54,7 +54,7 @@ const KnowledgeBaseClient = ({
   lang,
   dict,
 }: KnowledgeBaseClientProps) => {
-  const [kb, setKb] = useState<initialKb | null>(initialKb);
+  const [kb, setKb] = useState<initialKb>(initialKb);
   const router = useRouter();
   const t = dict.dashboard_knowledge_base;
   const locale = lang === "ar" ? "ar" : "en-US";
@@ -86,7 +86,7 @@ const KnowledgeBaseClient = ({
   };
 
   const handleEdit = () => {
-    router.push(`/${lang}/dashboard/setup`);
+    router.push(`/${lang}/dashboard/setup/${kb.id}`);
   };
 
   const handleCopy = () => {
@@ -132,9 +132,8 @@ const KnowledgeBaseClient = ({
 
     if (ok.isConfirmed) {
       try {
-        await deleteKb(kb.userId);
+        await deleteKb(kb.id);
         toast.success(t.delete_kb_success ?? "Knowledge base deleted");
-        setKb(null);
         router.push(`/${lang}/dashboard`);
       } catch (error: unknown) {
         console.error("Failed to delete KB:", error);
