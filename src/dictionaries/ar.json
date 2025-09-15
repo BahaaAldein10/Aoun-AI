@@ -76,7 +76,9 @@
     "downgradingOn": "سيتم التخفيض في",
     "pastDueWarning": "دفع اشتراكك متأخر. يرجى تحديث طريقة الدفع لمتابعة استخدام الخدمة.",
     "activeSubscriptionMessage": "لديك اشتراك نشط. لتغيير الخطة، يرجى إلغاء اشتراكك الحالي أولًا ثم الاشتراك في خطة جديدة.",
-    "contactToChangePlan": "تواصل مع الدعم لتغيير الخطة"
+    "contactToChangePlan": "تواصل مع الدعم لتغيير الخطة",
+    "contactUs": "تواصل معنا",
+    "switchPlan": "تغيير الخطة"
   },
   "footer": {
     "aboutTitle": "عون",

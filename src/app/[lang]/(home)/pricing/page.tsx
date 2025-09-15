@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getSiteContent } from "@/lib/actions/siteContent";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
@@ -60,14 +61,32 @@ const PricingPage = async ({ params }: Props) => {
   });
 
   const getCurrentPlanName = () => {
-    return currentSubscription?.plan?.name || null;
+    return currentSubscription?.plan?.name || "FREE";
   };
+
+  const getContactEmail = await getSiteContent({ lang }).then(
+    (res) => res?.footer?.contactEmail,
+  );
 
   const getButtonProps = (plan: Plan) => {
     const isFree = plan.priceAmount === 0;
+    const isEnterprise = plan.name.toUpperCase() === "ENTERPRISE";
     const currentPlanName = getCurrentPlanName();
     const hasActivePaidSubscription =
       currentSubscription && currentPlanName !== "FREE";
+    const isCurrentPlan = currentPlanName === plan.name;
+
+    // Enterprise plan - always show Contact Us
+    if (isEnterprise) {
+      return {
+        text: t.contactUs || "Contact Us",
+        disabled: false,
+        variant: "default" as const,
+        isCurrentPlan,
+        showButton: true,
+        isEnterprise: true,
+      };
+    }
 
     // Free plan - always accessible
     if (isFree) {
@@ -75,19 +94,33 @@ const PricingPage = async ({ params }: Props) => {
         text: t.getStarted,
         disabled: false,
         variant: "outline" as const,
-        isCurrentPlan: currentPlanName === "FREE",
+        isCurrentPlan,
         showButton: true,
+        isEnterprise: false,
       };
     }
 
-    // Paid plans - only show if user doesn't have an active paid subscription
-    if (hasActivePaidSubscription) {
+    // Current plan - show as current
+    if (isCurrentPlan) {
       return {
-        text: t.subscribe,
+        text: t.currentPlan,
         disabled: true,
         variant: "outline" as const,
-        isCurrentPlan: currentPlanName === plan.name,
-        showButton: false, // Hide button for paid plans when user has active subscription
+        isCurrentPlan: true,
+        showButton: true,
+        isEnterprise: false,
+      };
+    }
+
+    // User has different paid subscription - allow switching
+    if (hasActivePaidSubscription) {
+      return {
+        text: t.switchPlan || "Switch Plan",
+        disabled: false,
+        variant: plan.popular ? ("default" as const) : ("outline" as const),
+        isCurrentPlan: false,
+        showButton: true,
+        isEnterprise: false,
       };
     }
 
@@ -96,8 +129,9 @@ const PricingPage = async ({ params }: Props) => {
       text: t.subscribe,
       disabled: false,
       variant: plan.popular ? ("default" as const) : ("outline" as const),
-      isCurrentPlan: currentPlanName === plan.name,
+      isCurrentPlan: false,
       showButton: true,
+      isEnterprise: false,
     };
   };
 
@@ -224,6 +258,9 @@ const PricingPage = async ({ params }: Props) => {
                         variant={buttonProps.variant}
                         hasActivePaidSubscription={!!hasActivePaidSubscription}
                         hasUserId={!!session?.user.id}
+                        isEnterprise={buttonProps.isEnterprise}
+                        isCurrentPlan={buttonProps.isCurrentPlan}
+                        contactEmail={getContactEmail ?? ""}
                       />
                     )}
                   </CardFooter>

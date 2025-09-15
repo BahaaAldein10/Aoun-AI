@@ -1,10 +1,10 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { SupportedLang } from "@/lib/dictionaries";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import Spinner from "./Spinner";
-import { SupportedLang } from "@/lib/dictionaries";
 
 interface CheckoutButtonProps {
   planId: string;
@@ -16,6 +16,9 @@ interface CheckoutButtonProps {
   variant?: "default" | "outline" | "secondary";
   hasActivePaidSubscription: boolean;
   hasUserId: boolean;
+  isEnterprise?: boolean;
+  isCurrentPlan?: boolean;
+  contactEmail: string;
 }
 
 export default function CheckoutButton({
@@ -26,14 +29,33 @@ export default function CheckoutButton({
   popular = false,
   disabled = false,
   variant = "default",
-  hasActivePaidSubscription,
+  contactEmail,
   hasUserId,
+  isEnterprise = false,
+  isCurrentPlan = false,
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
 
+  const handleEnterpriseContact = () => {
+    const email = contactEmail;
+    const subject = encodeURIComponent("Enterprise Plan Inquiry");
+    const body = encodeURIComponent(
+      lang === "ar"
+        ? "مرحباً،\n\nأرغب في معرفة المزيد عن الخطة المؤسسية.\n\nشكراً لكم."
+        : "Hello,\n\nI'm interested in learning more about your Enterprise plan.\n\nThank you.",
+    );
+    window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  };
+
   const handleCheckout = async () => {
-    // Do nothing if button is disabled or user is on current plan
-    if (disabled || hasActivePaidSubscription) return;
+    // Handle enterprise plans
+    if (isEnterprise) {
+      handleEnterpriseContact();
+      return;
+    }
+
+    // Do nothing if button is disabled and it's the current plan
+    if (disabled && isCurrentPlan) return;
 
     // Do nothing if user is not logged in
     if (!hasUserId) {
@@ -48,7 +70,6 @@ export default function CheckoutButton({
     setLoading(true);
 
     try {
-      // Updated API call - still pass lang for success/cancel URLs but not for plan lookup
       const response = await fetch("/api/stripe/create-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -72,7 +93,7 @@ export default function CheckoutButton({
               ? "تم تحديث الخطة بنجاح!"
               : "Plan updated successfully!"),
         );
-        // Optionally reload the page to show updated state
+        // Reload the page to show updated state
         setTimeout(() => {
           window.location.reload();
         }, 1500);
@@ -97,7 +118,7 @@ export default function CheckoutButton({
   };
 
   const getButtonText = () => {
-    if (loading) return RedirectingText;
+    if (loading && !isEnterprise) return RedirectingText;
     return SubscribeText;
   };
 
@@ -108,9 +129,9 @@ export default function CheckoutButton({
   return (
     <Button
       onClick={handleCheckout}
-      disabled={disabled || loading}
+      disabled={(disabled && isCurrentPlan) || (loading && !isEnterprise)}
       variant={getButtonVariant()}
-      className={`w-full ${popular ? "shadow-lg" : ""} ${hasActivePaidSubscription ? "hidden" : ""}`}
+      className={`w-full ${popular ? "shadow-lg" : ""}`}
       size="lg"
     >
       {getButtonIcon()}

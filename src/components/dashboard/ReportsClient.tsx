@@ -1,6 +1,8 @@
 "use client";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -19,7 +21,8 @@ import {
 import { Dictionary } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
 import { cssVar } from "@/lib/utils";
-import { useMemo } from "react";
+import { Crown, Lock } from "lucide-react";
+import Link from "next/link";
 import {
   Bar,
   BarChart,
@@ -46,33 +49,121 @@ interface ReportsClientProps {
     interactions30d: number;
     accuracy30d: string | number;
   }[];
+  hasPaidPlan: boolean;
 }
 
-
-const ReportsClient = ({ lang, dict, monthlyData, bots }: ReportsClientProps) => {
+const ReportsClient = ({
+  lang,
+  dict,
+  monthlyData,
+  bots,
+  hasPaidPlan,
+}: ReportsClientProps) => {
   const t = dict.dashboard_reports;
   const isRTL = lang === "ar";
 
+  // Mock data for free users to show the structure
+  const mockMonthlyData = [
+    { month: "Jan", interactions: 0, users: 0 },
+    { month: "Feb", interactions: 0, users: 0 },
+    { month: "Mar", interactions: 0, users: 0 },
+    { month: "Apr", interactions: 0, users: 0 },
+    { month: "May", interactions: 0, users: 0 },
+    { month: "Jun", interactions: 0, users: 0 },
+  ];
+
+  const mockBots = [
+    {
+      id: "1",
+      name: "---",
+      status: "---",
+      interactions30d: 0,
+      accuracy30d: "---",
+    },
+    {
+      id: "2",
+      name: "---",
+      status: "---",
+      interactions30d: 0,
+      accuracy30d: "---",
+    },
+  ];
+
+  const displayData = hasPaidPlan ? monthlyData : mockMonthlyData;
+  const displayBots = hasPaidPlan ? bots : mockBots;
+
+  const UpgradeButton = () => (
+    <Link href={`/${lang}/pricing`}>
+      <Button className="gap-2">
+        <Crown className="h-4 w-4" />
+        {lang === "ar" ? "ترقية الخطة" : "Upgrade Plan"}
+      </Button>
+    </Link>
+  );
+
   return (
     <div className="space-y-6">
-      <h1
-        className={`font-headline text-2xl font-bold ${
-          isRTL ? "rtl:text-right" : ""
-        }`}
+      <div
+        className={`flex items-center justify-between ${isRTL ? "rtl:text-right" : ""}`}
       >
-        {t.title}
-      </h1>
+        <h1 className="font-headline text-2xl font-bold">{t.title}</h1>
+        {!hasPaidPlan && <UpgradeButton />}
+      </div>
 
-      <Card className={isRTL ? "rtl:text-right" : ""}>
+      {/* Free Plan Warning */}
+      {!hasPaidPlan && (
+        <Alert className="border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950">
+          <Lock className="h-4 w-4 text-orange-600" />
+          <AlertTitle className="text-orange-800 dark:text-orange-200">
+            {lang === "ar" ? "ميزة محدودة" : "Limited Feature"}
+          </AlertTitle>
+          <AlertDescription className="text-orange-700 dark:text-orange-300">
+            {lang === "ar"
+              ? "تقارير مفصلة متوفرة فقط للخطط المدفوعة. قم بالترقية للوصول إلى تحليلات شاملة لروبوتاتك."
+              : "Detailed reports are available for paid plans only. Upgrade to access comprehensive analytics for your bots."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <Card
+        className={`${isRTL ? "rtl:text-right" : ""} ${!hasPaidPlan ? "opacity-60" : ""}`}
+      >
         <CardHeader>
-          <CardTitle>{t.monthly_performance}</CardTitle>
-          <CardDescription>{t.monthly_performance_desc}</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                {t.monthly_performance}
+                {!hasPaidPlan && (
+                  <Lock className="text-muted-foreground h-4 w-4" />
+                )}
+              </CardTitle>
+              <CardDescription>{t.monthly_performance_desc}</CardDescription>
+            </div>
+          </div>
         </CardHeader>
         <CardContent dir="ltr">
-          <div style={{ width: "100%", height: 350 }}>
+          <div style={{ width: "100%", height: 350 }} className="relative">
+            {!hasPaidPlan && (
+              <div className="bg-background/80 absolute inset-0 z-10 flex items-center justify-center backdrop-blur-sm">
+                <div className="space-y-4 text-center">
+                  <Lock className="text-muted-foreground mx-auto h-12 w-12" />
+                  <div>
+                    <p className="text-foreground font-medium">
+                      {lang === "ar" ? "ميزة مميزة" : "Premium Feature"}
+                    </p>
+                    <p className="text-muted-foreground text-sm">
+                      {lang === "ar"
+                        ? "قم بالترقية لعرض التحليلات المفصلة"
+                        : "Upgrade to view detailed analytics"}
+                    </p>
+                  </div>
+                  <UpgradeButton />
+                </div>
+              </div>
+            )}
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
-                data={monthlyData}
+                data={displayData}
                 margin={{ left: isRTL ? 10 : 0, right: isRTL ? 0 : 10 }}
               >
                 <CartesianGrid
@@ -121,12 +212,43 @@ const ReportsClient = ({ lang, dict, monthlyData, bots }: ReportsClientProps) =>
         </CardContent>
       </Card>
 
-      <Card className={isRTL ? "rtl:text-right" : ""}>
+      <Card
+        className={`${isRTL ? "rtl:text-right" : ""} ${!hasPaidPlan ? "opacity-60" : ""}`}
+      >
         <CardHeader>
-          <CardTitle>{t.bot_performance_details}</CardTitle>
-          <CardDescription>{t.bot_performance_desc}</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                {t.bot_performance_details}
+                {!hasPaidPlan && (
+                  <Lock className="text-muted-foreground h-4 w-4" />
+                )}
+              </CardTitle>
+              <CardDescription>{t.bot_performance_desc}</CardDescription>
+            </div>
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="relative">
+          {!hasPaidPlan && (
+            <div className="bg-background/80 absolute inset-0 z-10 flex items-center justify-center rounded-lg backdrop-blur-sm">
+              <div className="space-y-4 text-center">
+                <Lock className="text-muted-foreground mx-auto h-12 w-12" />
+                <div>
+                  <p className="text-foreground font-medium">
+                    {lang === "ar"
+                      ? "تفاصيل الأداء المميزة"
+                      : "Premium Performance Details"}
+                  </p>
+                  <p className="text-muted-foreground text-sm">
+                    {lang === "ar"
+                      ? "احصل على تفاصيل أداء شاملة لجميع روبوتاتك"
+                      : "Get comprehensive performance details for all your bots"}
+                  </p>
+                </div>
+                <UpgradeButton />
+              </div>
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -145,7 +267,7 @@ const ReportsClient = ({ lang, dict, monthlyData, bots }: ReportsClientProps) =>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bots.map((bot) => (
+              {displayBots.map((bot) => (
                 <TableRow key={bot.id}>
                   <TableCell
                     className={
@@ -155,19 +277,26 @@ const ReportsClient = ({ lang, dict, monthlyData, bots }: ReportsClientProps) =>
                     {bot.name}
                   </TableCell>
                   <TableCell className={isRTL ? "rtl:text-right" : ""}>
-                    <Badge
-                      variant={
-                        bot.status === "Active" ? "default" : "destructive"
-                      }
-                    >
-                      {bot.status === "Active" ? t.active : t.inactive}
-                    </Badge>
+                    {bot.status === "---" ? (
+                      <span className="text-muted-foreground">---</span>
+                    ) : (
+                      <Badge
+                        variant={
+                          bot.status === "Active" ? "default" : "destructive"
+                        }
+                      >
+                        {bot.status === "Active" ? t.active : t.inactive}
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className={isRTL ? "rtl:text-right" : ""}>
-                    {bot.interactions30d.toLocaleString()}
+                    {typeof bot.interactions30d === "number" &&
+                    bot.interactions30d > 0
+                      ? bot.interactions30d.toLocaleString()
+                      : "---"}
                   </TableCell>
                   <TableCell className={isRTL ? "rtl:text-right" : ""}>
-                    {bot.accuracy30d}%
+                    {bot.accuracy30d === "---" ? "---" : `${bot.accuracy30d}%`}
                   </TableCell>
                 </TableRow>
               ))}

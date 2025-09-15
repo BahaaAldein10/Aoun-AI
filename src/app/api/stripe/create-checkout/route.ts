@@ -27,7 +27,11 @@ export async function POST(request: Request) {
         subscriptions: {
           where: {
             status: {
-              in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING],
+              in: [
+                SubscriptionStatus.ACTIVE,
+                SubscriptionStatus.TRIALING,
+                SubscriptionStatus.PAST_DUE,
+              ],
             },
           },
           include: { plan: true },
@@ -44,9 +48,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Plan not found" }, { status: 404 });
     }
 
+    // Enterprise plan handling - should not reach here as it's handled on frontend
+    if (targetPlan.name.toUpperCase() === "ENTERPRISE") {
+      return NextResponse.json(
+        { error: "Enterprise plans require direct contact" },
+        { status: 400 },
+      );
+    }
+
+    const currentSubscription = user.subscriptions[0];
+
     // FREE plan handling
     if (targetPlan.name === "FREE") {
-      const currentSubscription = user.subscriptions[0];
+      // Cancel existing paid subscription if any
       if (currentSubscription?.stripeSubscriptionId) {
         await stripe.subscriptions.update(
           currentSubscription.stripeSubscriptionId,
@@ -61,6 +75,7 @@ export async function POST(request: Request) {
         });
       }
 
+      // Create new free subscription
       await prisma.subscription.create({
         data: {
           userId: user.id,
@@ -111,23 +126,60 @@ export async function POST(request: Request) {
       planName: targetPlan.name,
     };
 
-    const sessionParams: Stripe.Checkout.SessionCreateParams = {
-      mode: "subscription",
-      success_url:
-        lang === "en"
-          ? process.env.STRIPE_SUCCESS_URL_EN!
-          : process.env.STRIPE_SUCCESS_URL_AR!,
-      cancel_url:
-        lang === "en"
-          ? process.env.STRIPE_CANCEL_URL_EN!
-          : process.env.STRIPE_CANCEL_URL_AR!,
-      payment_method_types: ["card"],
-      customer: stripeCustomerId,
-      line_items: [{ price: stripePriceId, quantity: 1 }],
-      subscription_data: {
-        metadata: subscriptionMetadata,
-      },
-    };
+    // Handle subscription updates vs new subscriptions
+    let sessionParams: Stripe.Checkout.SessionCreateParams;
+
+    if (currentSubscription?.stripeSubscriptionId) {
+      // User has existing subscription - create checkout for subscription update
+      sessionParams = {
+        mode: "subscription",
+        success_url:
+          lang === "en"
+            ? process.env.STRIPE_SUCCESS_URL_EN!
+            : process.env.STRIPE_SUCCESS_URL_AR!,
+        cancel_url:
+          lang === "en"
+            ? process.env.STRIPE_CANCEL_URL_EN!
+            : process.env.STRIPE_CANCEL_URL_AR!,
+        payment_method_types: ["card"],
+        customer: stripeCustomerId,
+        line_items: [{ price: stripePriceId, quantity: 1 }],
+        subscription_data: {
+          metadata: subscriptionMetadata,
+        },
+        // Add metadata to identify this as a plan change
+        metadata: {
+          userId: user.id,
+          planId: targetPlan.id,
+          oldSubscriptionId: currentSubscription.stripeSubscriptionId,
+          action: "change_plan",
+        },
+      };
+    } else {
+      // New subscription
+      sessionParams = {
+        mode: "subscription",
+        success_url:
+          lang === "en"
+            ? process.env.STRIPE_SUCCESS_URL_EN!
+            : process.env.STRIPE_SUCCESS_URL_AR!,
+        cancel_url:
+          lang === "en"
+            ? process.env.STRIPE_CANCEL_URL_EN!
+            : process.env.STRIPE_CANCEL_URL_AR!,
+        payment_method_types: ["card"],
+        customer: stripeCustomerId,
+        line_items: [{ price: stripePriceId, quantity: 1 }],
+        subscription_data: {
+          metadata: subscriptionMetadata,
+        },
+        metadata: {
+          userId: user.id,
+          planId: targetPlan.id,
+          action: "new_subscription",
+        },
+      };
+    }
 
     const checkoutSession =
       await stripe.checkout.sessions.create(sessionParams);
