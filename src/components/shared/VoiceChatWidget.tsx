@@ -67,6 +67,8 @@ export default function VoiceChatWidget({
 
   // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   // Demo limitations
   const [messageCount, setMessageCount] = useState(0);
@@ -405,9 +407,6 @@ export default function VoiceChatWidget({
     return json;
   };
 
-  // ... [Include all WebRTC functions from WidgetFrame: waitForIceGatheringComplete, createPeerConnection, setupDataChannel, startCall, stopCall]
-  // (Copy these functions exactly from WidgetFrame, they're too long to repeat here)
-
   function waitForIceGatheringComplete(
     pc: RTCPeerConnection,
     timeoutMs = 10000,
@@ -743,7 +742,7 @@ export default function VoiceChatWidget({
     return dc;
   };
 
-  const startCall = async () => {
+  const initiateCall = async () => {
     if (limitReached) {
       const limitMsg: Msg = {
         id: `limit-${Date.now()}`,
@@ -891,6 +890,17 @@ export default function VoiceChatWidget({
     }
   };
 
+  const startCall = async () => {
+    // Check if terms have been accepted
+    if (!termsAccepted) {
+      setShowTermsModal(true);
+      return;
+    }
+
+    // If terms are already accepted, proceed with the call
+    await initiateCall();
+  };
+
   const stopCall = () => {
     setRecording(false);
     setAudioLevel(0);
@@ -952,6 +962,18 @@ export default function VoiceChatWidget({
     ephemeralSessionRef.current = null;
   };
 
+  const handleAcceptTerms = async () => {
+    setTermsAccepted(true);
+    setShowTermsModal(false);
+    // Now actually start the call using the extracted logic
+    await initiateCall();
+  };
+
+  const handleDeclineTerms = () => {
+    setShowTermsModal(false);
+    setMode("text"); // Switch back to text mode
+  };
+
   const isInCall = recording;
   const pendingStatus = isTyping || voicePending;
 
@@ -960,6 +982,103 @@ export default function VoiceChatWidget({
       className={cn("flex h-full min-h-0 flex-col", isRtl && "rtl", className)}
       dir={isRtl ? "rtl" : "ltr"}
     >
+      {/* Terms and Conditions Modal */}
+      {showTermsModal && (
+        <div className="bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center bg-black">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-900">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">
+                {lang === "en"
+                  ? "Voice Assistant Terms"
+                  : "شروط المساعد الصوتي"}
+              </h3>
+            </div>
+
+            <div className="mb-6 max-h-60 overflow-y-auto text-sm text-gray-600 dark:text-gray-300">
+              {lang === "en" ? (
+                <div className="space-y-3">
+                  <p>
+                    By using the voice assistant, you agree to the following:
+                  </p>
+                  <ul className="list-inside list-disc space-y-2">
+                    <li>
+                      Your voice will be processed in real-time for conversation
+                      purposes
+                    </li>
+                    <li>
+                      Audio data is transmitted securely but may be processed by
+                      third-party AI services
+                    </li>
+                    <li>
+                      No permanent recordings are stored, but temporary
+                      processing may occur
+                    </li>
+                    <li>
+                      You are responsible for not sharing sensitive personal
+                      information
+                    </li>
+                    <li>
+                      The service is provided as-is without guarantees of
+                      accuracy
+                    </li>
+                    <li>
+                      You must be 18+ or have guardian permission to use voice
+                      features
+                    </li>
+                    <li>This is a demo version with limited interactions</li>
+                  </ul>
+                  <p className="text-xs text-gray-500">
+                    By clicking &quot;I Agree&quot;, you consent to these terms
+                    and confirm you understand the voice processing involved.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p>باستخدام المساعد الصوتي، فإنك توافق على ما يلي:</p>
+                  <ul className="list-inside list-disc space-y-2">
+                    <li>سيتم معالجة صوتك في الوقت الفعلي لأغراض المحادثة</li>
+                    <li>
+                      يتم إرسال البيانات الصوتية بشكل آمن ولكن قد تتم معالجتها
+                      بواسطة خدمات ذكاء اصطناعي من طرف ثالث
+                    </li>
+                    <li>
+                      لا يتم تخزين تسجيلات دائمة، ولكن قد تحدث معالجة مؤقتة
+                    </li>
+                    <li>أنت مسؤول عن عدم مشاركة المعلومات الشخصية الحساسة</li>
+                    <li>يتم تقديم الخدمة كما هي دون ضمانات للدقة</li>
+                    <li>
+                      يجب أن تكون 18+ أو لديك إذن من الوصي لاستخدام الميزات
+                      الصوتية
+                    </li>
+                    <li>هذه نسخة تجريبية مع تفاعلات محدودة</li>
+                  </ul>
+                  <p className="text-xs text-gray-500">
+                    بالنقر على &quot;أوافق&quot;، فإنك توافق على هذه الشروط
+                    وتؤكد فهمك لمعالجة الصوت المتضمنة.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={handleDeclineTerms}
+                className="flex-1"
+              >
+                {lang === "en" ? "Cancel" : "إلغاء"}
+              </Button>
+              <Button
+                onClick={handleAcceptTerms}
+                className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700"
+              >
+                {lang === "en" ? "I Agree" : "أوافق"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between border-b bg-gradient-to-r from-blue-50 to-purple-50 p-4 dark:from-blue-950/20 dark:to-purple-950/20">
         <div className="flex items-center gap-3">
