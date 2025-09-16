@@ -321,8 +321,7 @@ export async function POST(request: NextRequest) {
     }
 
     const isArabic = /[\u0600-\u06FF]/.test(transcript ?? "");
-    const llmModel =
-      process.env.LLM_MODEL || process.env.CHAT_MODEL || "gpt-4o-mini";
+    const llmModel = process.env.CHAT_MODEL || "gpt-4o-mini";
     const systemPromptBase = isArabic
       ? "أنت مساعد ذكي يتحدث العربية. كن مفيداً ومختصراً في إجاباتك. أجب باللغة العربية."
       : "You are a helpful assistant. Keep responses concise and in the user's language.";
@@ -466,7 +465,7 @@ export async function POST(request: NextRequest) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "tts-1",
+            model: "gpt-4o-mini-tts",
             input: reply,
             voice: voice,
             response_format: "mp3",

@@ -144,11 +144,8 @@ export default function VoiceChatFloatingWidget({
                   </div>
                   <div>
                     <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      {t.voice_assistant || "AI Assistant"}
+                      {lang === "en" ? "AI Assistant" : "المساعد الذكي"}
                     </h3>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">
-                      {t.powered_by_openai || "AI-powered chat & voice"}
-                    </p>
                   </div>
                 </div>
 
