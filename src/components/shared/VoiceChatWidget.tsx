@@ -15,8 +15,7 @@ import {
   Play,
   Send,
   Trash2,
-  Volume2,
-  VolumeX,
+  X,
 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Spinner from "./Spinner";
@@ -42,6 +41,7 @@ interface VoiceChatWidgetProps {
   onLimitReached?: () => void;
   onClose?: () => void;
   className?: string;
+  initialMode?: "text" | "voice";
 }
 
 export default function VoiceChatWidget({
@@ -49,6 +49,7 @@ export default function VoiceChatWidget({
   onLimitReached,
   onClose,
   className,
+  initialMode = "text",
 }: VoiceChatWidgetProps) {
   // Chat state
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -61,12 +62,11 @@ export default function VoiceChatWidget({
   const [voicePending, setVoicePending] = useState(false);
   const [permission, setPermission] = useState<boolean | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
-  const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
 
-  // Mode state
-  const [mode, setMode] = useState<"text" | "voice">("text");
+  // Mode state (now fixed based on initialMode)
+  const [mode] = useState<"text" | "voice">(initialMode);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
 
@@ -80,7 +80,7 @@ export default function VoiceChatWidget({
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
 
-  // WebRTC refs (same as WidgetFrame)
+  // WebRTC refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
@@ -99,18 +99,24 @@ export default function VoiceChatWidget({
       id: `welcome-${Date.now()}`,
       role: "bot",
       text:
-        lang === "en"
-          ? "Hi! I'm a demo assistant. Try asking me about our platform or services. You have limited interactions in this demo."
-          : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا. لديك تفاعلات محدودة في هذا العرض التوضيحي.",
+        mode === "voice"
+          ? lang === "en"
+            ? "Hi! I'm ready for voice conversation. Click the phone icon to start speaking with me!"
+            : "مرحبا! أنا جاهز للمحادثة الصوتية. انقر على أيقونة الهاتف لبدء التحدث معي!"
+          : lang === "en"
+            ? "Hi! I'm a demo assistant. Try asking me about our platform or services. You have limited interactions in this demo."
+            : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا. لديك تفاعلات محدودة في هذا العرض التوضيحي.",
       createdAt: new Date().toISOString(),
     };
     setMessages([welcomeMsg]);
-  }, [lang]);
+  }, [lang, mode]);
 
-  // Check microphone permission on mount
+  // Check microphone permission on mount for voice mode
   useEffect(() => {
-    checkMicrophonePermission();
-  }, []);
+    if (mode === "voice") {
+      checkMicrophonePermission();
+    }
+  }, [mode]);
 
   // Auto scroll messages
   useEffect(() => {
@@ -197,7 +203,7 @@ export default function VoiceChatWidget({
     return true;
   };
 
-  // Send text message (simplified, no auth required)
+  // Send text message
   const sendTextMessage = async () => {
     const message = textInput.trim();
     if (!message) return;
@@ -232,7 +238,7 @@ export default function VoiceChatWidget({
             role: msg.role === "user" ? "user" : "assistant",
             text: msg.text,
           })),
-          isDemo: true, // Flag for demo usage
+          isDemo: true,
         }),
       });
 
@@ -260,9 +266,8 @@ export default function VoiceChatWidget({
       };
       pushMessage(botMsg);
 
-      if (audioEnabled) {
-        generateTTS(reply, botMsg.id);
-      }
+      // Always generate TTS for text messages
+      generateTTS(reply, botMsg.id);
     } catch (error) {
       console.error("Text chat error:", error);
       const errorMsg: Msg = {
@@ -307,8 +312,6 @@ export default function VoiceChatWidget({
   };
 
   const playAudio = (messageId: string, url: string) => {
-    if (!audioEnabled) return;
-
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -356,9 +359,13 @@ export default function VoiceChatWidget({
       id: `welcome-${Date.now()}`,
       role: "bot",
       text:
-        lang === "en"
-          ? "Hi! I'm a demo assistant. Try asking me about our platform or services."
-          : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا.",
+        mode === "voice"
+          ? lang === "en"
+            ? "Hi! I'm ready for voice conversation. Click the phone icon to start speaking with me!"
+            : "مرحبا! أنا جاهز للمحادثة الصوتية. انقر على أيقونة الهاتف لبدء التحدث معي!"
+          : lang === "en"
+            ? "Hi! I'm a demo assistant. Try asking me about our platform or services."
+            : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا.",
       createdAt: new Date().toISOString(),
     };
     setMessages([welcomeMsg]);
@@ -382,7 +389,7 @@ export default function VoiceChatWidget({
   const pending = isTyping || voicePending;
   const limitReached = messageCount >= MAX_DEMO_MESSAGES;
 
-  // WebRTC functions (same as WidgetFrame but with demo kbId)
+  // WebRTC functions
   const fetchEphemeralSession = async () => {
     const resp = await fetch("/api/realtime/session", {
       method: "POST",
@@ -971,7 +978,6 @@ export default function VoiceChatWidget({
 
   const handleDeclineTerms = () => {
     setShowTermsModal(false);
-    setMode("text"); // Switch back to text mode
   };
 
   const isInCall = recording;
@@ -1127,55 +1133,6 @@ export default function VoiceChatWidget({
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg bg-gray-200 p-1 dark:bg-gray-700">
-            <Button
-              variant={mode === "text" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => {
-                if (isInCall) stopCall();
-                setMode("text");
-              }}
-              disabled={limitReached}
-              className="h-7 px-3 text-xs"
-            >
-              {lang === "en" ? "Text" : "نص"}
-            </Button>
-            <Button
-              variant={mode === "voice" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => {
-                if (permission !== false) setMode("voice");
-              }}
-              disabled={permission === false || limitReached}
-              className="h-7 px-3 text-xs"
-            >
-              {lang === "en" ? "Voice" : "صوتي"}
-            </Button>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setAudioEnabled(!audioEnabled)}
-            disabled={limitReached}
-            className="h-7 w-7"
-            title={
-              audioEnabled
-                ? lang === "en"
-                  ? "Disable audio"
-                  : "تعطيل الصوت"
-                : lang === "en"
-                  ? "Enable audio"
-                  : "تمكين الصوت"
-            }
-          >
-            {audioEnabled ? (
-              <Volume2 className="h-4 w-4" />
-            ) : (
-              <VolumeX className="h-4 w-4" />
-            )}
-          </Button>
-
           {messages.length > 1 && (
             <Button
               variant="ghost"
@@ -1185,6 +1142,18 @@ export default function VoiceChatWidget({
               title={lang === "en" ? "Clear messages" : "مسح الرسائل"}
             >
               <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+
+          {onClose && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              className="h-8 w-8"
+              title={lang === "en" ? "Close" : "إغلاق"}
+            >
+              <X className="h-4 w-4" />
             </Button>
           )}
         </div>

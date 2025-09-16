@@ -3,7 +3,7 @@
 import { useDictionary } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
 import { cn } from "@/lib/utils";
-import { MessageSquare, Minimize2, X } from "lucide-react";
+import { MessageSquare, Mic } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import VoiceChatWidget from "./VoiceChatWidget";
 
@@ -20,6 +20,10 @@ export default function VoiceChatFloatingWidget({
   const t = dict.widget;
 
   const [isOpen, setIsOpen] = useState(false);
+  const [selectedMode, setSelectedMode] = useState<"text" | "voice" | null>(
+    null,
+  );
+  const [showModeSelection, setShowModeSelection] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout>(null);
@@ -28,7 +32,7 @@ export default function VoiceChatFloatingWidget({
     setIsHovered(true);
     tooltipTimeoutRef.current = setTimeout(() => {
       setShowTooltip(true);
-    }, 800); // Show tooltip after 800ms hover
+    }, 800);
   };
 
   const handleMouseLeave = () => {
@@ -48,8 +52,14 @@ export default function VoiceChatFloatingWidget({
   }, []);
 
   const handleToggle = () => {
-    setIsOpen(!isOpen);
-    setShowTooltip(false);
+    if (!isOpen) {
+      setShowModeSelection(true);
+      setShowTooltip(false);
+    } else {
+      setIsOpen(false);
+      setSelectedMode(null);
+      setShowModeSelection(false);
+    }
 
     // Haptic feedback if available
     if ("vibrate" in navigator) {
@@ -57,12 +67,24 @@ export default function VoiceChatFloatingWidget({
     }
   };
 
+  const handleModeSelect = (mode: "text" | "voice") => {
+    setSelectedMode(mode);
+    setShowModeSelection(false);
+    setIsOpen(true);
+  };
+
+  const handleClose = () => {
+    setIsOpen(false);
+    setSelectedMode(null);
+    setShowModeSelection(false);
+  };
+
   return (
     <>
       {/* Floating Button */}
       <div className="fixed right-6 bottom-6 z-50">
         {/* Tooltip */}
-        {showTooltip && !isOpen && (
+        {showTooltip && !isOpen && !showModeSelection && (
           <div className="animate-in fade-in-0 slide-in-from-bottom-2 absolute right-0 bottom-20 mb-2 rounded-lg bg-gray-900 px-3 py-2 text-sm whitespace-nowrap text-white shadow-lg duration-200">
             {t.start_voice_chat || "Start chat"}
             <div className="absolute top-full right-4 h-0 w-0 border-t-4 border-r-4 border-l-4 border-transparent border-t-gray-900" />
@@ -84,7 +106,7 @@ export default function VoiceChatFloatingWidget({
             "transform hover:scale-110 active:scale-95",
             "focus:ring-4 focus:ring-blue-500/30 focus:outline-none",
             isHovered && "scale-110 shadow-2xl",
-            isOpen && "scale-95",
+            (isOpen || showModeSelection) && "scale-95",
           )}
           aria-label={t.voice_chat_aria || "Open chat"}
         >
@@ -109,20 +131,93 @@ export default function VoiceChatFloatingWidget({
             "absolute -top-1 -right-1 h-4 w-4 rounded-full transition-all duration-200",
             "border-2 border-white bg-green-500 dark:border-gray-800",
             "animate-pulse shadow-sm",
-            !isOpen && "scale-0 opacity-0",
+            !(isOpen || showModeSelection) && "scale-0 opacity-0",
           )}
         >
           <div className="h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
         </div>
       </div>
 
-      {/* Chat Widget Modal */}
-      {isOpen && (
+      {/* Mode Selection Modal */}
+      {showModeSelection && (
         <>
           {/* Backdrop */}
           <div
             className="animate-in fade-in-0 fixed inset-0 z-40 bg-black/50 backdrop-blur-sm duration-200"
-            onClick={() => setIsOpen(false)}
+            onClick={() => setShowModeSelection(false)}
+          />
+
+          {/* Mode Selection Container */}
+          <div className="animate-in slide-in-from-bottom-4 fade-in-0 fixed right-6 bottom-24 z-50 duration-300">
+            <div
+              className={cn(
+                "w-72 rounded-2xl bg-white shadow-2xl dark:bg-gray-900",
+                "border border-gray-200 dark:border-gray-700",
+                "overflow-hidden p-6 backdrop-blur-xl",
+                lang === "ar" && "rtl",
+              )}
+            >
+              <div className="mb-6 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
+                  <MessageSquare className="h-6 w-6 text-white" />
+                </div>
+                <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {lang === "en" ? "Choose Chat Mode" : "اختر وضع الدردشة"}
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {lang === "en"
+                    ? "How would you like to interact with the assistant?"
+                    : "كيف تريد التفاعل مع المساعد؟"}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => handleModeSelect("text")}
+                  className="group flex w-full items-center gap-4 rounded-xl border border-gray-200 p-4 transition-all hover:border-blue-300 hover:bg-blue-50 dark:border-gray-700 dark:hover:border-blue-600 dark:hover:bg-blue-900/20"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 group-hover:bg-blue-200 dark:bg-blue-900/30 dark:group-hover:bg-blue-800/40">
+                    <MessageSquare className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="font-medium text-gray-900 dark:text-gray-100">
+                      {lang === "en" ? "Text Chat" : "دردشة نصية"}
+                    </div>
+                    <div className="text-sm text-gray-600 dark:text-gray-400">
+                      {lang === "en" ? "Type your messages" : "اكتب رسائلك"}
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => handleModeSelect("voice")}
+                  className="group flex w-full items-center gap-4 rounded-xl border border-gray-200 p-4 transition-all hover:border-purple-300 hover:bg-purple-50 dark:border-gray-700 dark:hover:border-purple-600 dark:hover:bg-purple-900/20"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-purple-100 group-hover:bg-purple-200 dark:bg-purple-900/30 dark:group-hover:bg-purple-800/40">
+                    <Mic className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="font-medium text-gray-900 dark:text-gray-100">
+                      {lang === "en" ? "Voice Chat" : "دردشة صوتية"}
+                    </div>
+                    <div className="text-sm text-gray-600 dark:text-gray-400">
+                      {lang === "en" ? "Speak naturally" : "تحدث بطبيعية"}
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Chat Widget */}
+      {isOpen && selectedMode && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="animate-in fade-in-0 fixed inset-0 z-40 bg-black/50 backdrop-blur-sm duration-200"
+            onClick={handleClose}
           />
 
           {/* Widget Container */}
@@ -136,51 +231,12 @@ export default function VoiceChatFloatingWidget({
                 lang === "ar" && "rtl",
               )}
             >
-              {/* Header */}
-              <div className="flex items-center justify-between border-b border-gray-200 bg-gradient-to-r from-blue-50 via-purple-50 to-pink-50 p-4 dark:border-gray-700 dark:from-blue-950/20 dark:via-purple-950/20 dark:to-pink-950/20">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600">
-                    <MessageSquare className="h-4 w-4 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                      {lang === "en" ? "AI Assistant" : "المساعد الذكي"}
-                    </h3>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setIsOpen(false)}
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full",
-                      "text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300",
-                      "hover:bg-gray-100 dark:hover:bg-gray-800",
-                      "transition-colors duration-200",
-                    )}
-                    aria-label={t.minimize_aria || "Minimize"}
-                  >
-                    <Minimize2 className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => setIsOpen(false)}
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full",
-                      "text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300",
-                      "hover:bg-red-50 dark:hover:bg-red-900/20",
-                      "transition-colors duration-200",
-                    )}
-                    aria-label={t.close_aria || "Close"}
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Widget Content */}
-              <div className="h-[calc(100%-4rem)]">
-                <VoiceChatWidget lang={lang} onClose={() => setIsOpen(false)} />
-              </div>
+              <VoiceChatWidget
+                lang={lang}
+                onClose={handleClose}
+                initialMode={selectedMode}
+                className="h-full"
+              />
             </div>
           </div>
         </>
