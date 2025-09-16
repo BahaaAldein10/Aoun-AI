@@ -1,5 +1,5 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://aoun.cx/sitemap.xml
-Host: https://aoun.cx/
+Sitemap: https://www.aoun.cx/sitemap.xml
+Host: https://www.aoun.cx/

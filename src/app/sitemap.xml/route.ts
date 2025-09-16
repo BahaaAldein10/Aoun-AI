@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const EXTERNAL_DATA_URL = "https://aoun.cx/";
+const EXTERNAL_DATA_URL = "https://www.aoun.cx/";
 
 function generateSiteMap() {
   return `<?xml version="1.0" encoding="UTF-8"?>
