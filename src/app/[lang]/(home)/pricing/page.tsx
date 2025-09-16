@@ -12,7 +12,7 @@ import { getSiteContent } from "@/lib/actions/siteContent";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, type SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
-import { Plan, SubscriptionStatus } from "@prisma/client";
+import { Plan, Subscription, SubscriptionStatus } from "@prisma/client";
 import { AlertTriangle, Check, Star } from "lucide-react";
 import type { Metadata } from "next";
 
@@ -36,7 +36,7 @@ const PricingPage = async ({ params }: Props) => {
   const isRtl = lang === "ar";
 
   const session = await auth();
-  let currentSubscription = null;
+  let currentSubscription: (Subscription & { plan?: Plan }) | null = null;
 
   if (session?.user?.id) {
     currentSubscription = await prisma.subscription.findFirst({
@@ -64,79 +64,91 @@ const PricingPage = async ({ params }: Props) => {
     return currentSubscription?.plan?.name || "FREE";
   };
 
-  const getContactEmail = await getSiteContent({ lang }).then(
-    (res) => res?.footer?.contactEmail,
+  const contactEmail = await getSiteContent({ lang }).then(
+    (res) => res?.footer?.contactEmail ?? "",
   );
 
+  const hasSubscription = !!currentSubscription;
+  const currentPlanAmount = currentSubscription?.plan?.priceAmount ?? 0;
+  const currentPlanId = currentSubscription?.plan?.id ?? null;
+
   const getButtonProps = (plan: Plan) => {
-    const isFree = plan.priceAmount === 0;
     const isEnterprise = plan.name.toUpperCase() === "ENTERPRISE";
-    const currentPlanName = getCurrentPlanName();
-    const hasActivePaidSubscription =
-      currentSubscription && currentPlanName !== "FREE";
-    const isCurrentPlan = currentPlanName === plan.name;
+    const isCurrentPlan = currentPlanId === plan.id;
 
-    // Enterprise plan - always show Contact Us
-    if (isEnterprise) {
-      return {
-        text: t.contactUs || "Contact Us",
-        disabled: false,
-        variant: "default" as const,
-        isCurrentPlan,
-        showButton: true,
-        isEnterprise: true,
-      };
-    }
+    // If no subscription: all buttons enabled (subscribe)
+    if (!hasSubscription) {
+      if (isEnterprise) {
+        return {
+          text: t.contactUs || "Contact Us",
+          variant: "default" as const,
+          isCurrentPlan: false,
+          showButton: true,
+          isEnterprise: true,
+          disabled: false,
+        };
+      }
 
-    // Free plan - always accessible
-    if (isFree) {
       return {
-        text: t.getStarted,
-        disabled: false,
-        variant: "outline" as const,
-        isCurrentPlan,
-        showButton: true,
-        isEnterprise: false,
-      };
-    }
-
-    // Current plan - show as current
-    if (isCurrentPlan) {
-      return {
-        text: t.currentPlan,
-        disabled: true,
-        variant: "outline" as const,
-        isCurrentPlan: true,
-        showButton: true,
-        isEnterprise: false,
-      };
-    }
-
-    // User has different paid subscription - allow switching
-    if (hasActivePaidSubscription) {
-      return {
-        text: t.switchPlan || "Switch Plan",
-        disabled: false,
+        text: t.subscribe,
         variant: plan.popular ? ("default" as const) : ("outline" as const),
         isCurrentPlan: false,
         showButton: true,
         isEnterprise: false,
+        disabled: false,
       };
     }
 
-    // User has no subscription or only free - show subscribe button
+    // If user has a subscription:
+    // Enterprise: contact (still enabled)
+    if (isEnterprise) {
+      return {
+        text: t.contactUs || "Contact Us",
+        variant: "default" as const,
+        isCurrentPlan: false,
+        showButton: true,
+        isEnterprise: true,
+        disabled: false,
+      };
+    }
+
+    // If it's the current plan -> disabled and marked as current
+    if (isCurrentPlan) {
+      return {
+        text: t.currentPlan,
+        variant: "outline" as const,
+        isCurrentPlan: true,
+        showButton: true,
+        isEnterprise: false,
+        disabled: true,
+      };
+    }
+
+    // Determine if plan is lower-or-equal than current -> disable (no downgrades)
+    const isLowerOrEqual = (plan.priceAmount ?? 0) <= (currentPlanAmount ?? 0);
+    if (isLowerOrEqual) {
+      return {
+        text: t.switchPlan || "Switch Plan",
+        variant: plan.popular ? ("default" as const) : ("outline" as const),
+        isCurrentPlan: false,
+        showButton: true,
+        isEnterprise: false,
+        disabled: true,
+      };
+    }
+
+    // Otherwise it's strictly higher -> allow switching/upgrading
     return {
-      text: t.subscribe,
-      disabled: false,
+      text: t.switchPlan || "Switch Plan",
       variant: plan.popular ? ("default" as const) : ("outline" as const),
       isCurrentPlan: false,
       showButton: true,
       isEnterprise: false,
+      disabled: false,
     };
   };
 
-  const hasActivePaidSubscription =
-    currentSubscription && getCurrentPlanName() !== "FREE";
+  const hasActivePaidSubscription = !!currentSubscription;
 
   return (
     <section className="py-16 md:py-24">
@@ -159,8 +171,8 @@ const PricingPage = async ({ params }: Props) => {
                     {t.currentlyOn}{" "}
                     <span className="text-foreground font-medium">
                       {isRtl
-                        ? currentSubscription.plan.titleAr
-                        : currentSubscription.plan.titleEn}
+                        ? currentSubscription?.plan?.titleAr
+                        : currentSubscription?.plan?.titleEn}
                     </span>
                     {" - "}
                     {t.renewsOn}{" "}
@@ -187,7 +199,7 @@ const PricingPage = async ({ params }: Props) => {
           <div className="grid w-full max-w-6xl gap-8 lg:grid-cols-3">
             {plans.map((plan) => {
               const buttonProps = getButtonProps(plan);
-              const isCurrentPlan = getCurrentPlanName() === plan.name;
+              const isCurrentPlan = currentPlanId === plan.id;
 
               return (
                 <Card
@@ -256,11 +268,11 @@ const PricingPage = async ({ params }: Props) => {
                         popular={plan.popular && !isCurrentPlan}
                         disabled={buttonProps.disabled}
                         variant={buttonProps.variant}
-                        hasActivePaidSubscription={!!hasActivePaidSubscription}
+                        hasActivePaidSubscription={hasActivePaidSubscription}
                         hasUserId={!!session?.user.id}
                         isEnterprise={buttonProps.isEnterprise}
                         isCurrentPlan={buttonProps.isCurrentPlan}
-                        contactEmail={getContactEmail ?? ""}
+                        contactEmail={contactEmail ?? ""}
                       />
                     )}
                   </CardFooter>

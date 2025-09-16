@@ -196,39 +196,14 @@ export async function POST(req: Request) {
           break;
         }
 
-        // Handle plan switching - check if this is a plan change
-        const isChangePlan = session.metadata?.action === "change_plan";
-        const oldSubscriptionId = session.metadata?.oldSubscriptionId;
-
-        if (isChangePlan && oldSubscriptionId) {
-          // Cancel the old subscription
-          try {
-            await stripe.subscriptions.update(oldSubscriptionId, {
-              cancel_at_period_end: false, // Cancel immediately for plan changes
-            });
-
-            // Mark old subscription as canceled in database
-            await prisma.subscription.updateMany({
-              where: {
-                userId: user.id,
-                stripeSubscriptionId: oldSubscriptionId,
-              },
-              data: { status: "CANCELED", updatedAt: new Date() },
-            });
-          } catch (error) {
-            console.warn("Failed to cancel old subscription:", error);
-          }
-        } else {
-          // For new subscriptions, cancel any existing active subscriptions
-          await prisma.subscription.updateMany({
-            where: {
-              userId: user.id,
-              status: { in: ["ACTIVE", "TRIALING"] },
-              stripeSubscriptionId: { not: stripeSubscriptionId },
-            },
-            data: { status: "CANCELED", updatedAt: new Date() },
-          });
-        }
+        await prisma.subscription.updateMany({
+          where: {
+            userId: user.id,
+            status: { in: ["ACTIVE", "TRIALING"] },
+            stripeSubscriptionId: { not: stripeSubscriptionId },
+          },
+          data: { status: "CANCELED", updatedAt: new Date() },
+        });
 
         // Create or update the new subscription
         await prisma.subscription.upsert({
@@ -415,46 +390,13 @@ export async function POST(req: Request) {
           data: { status: "CANCELED", updatedAt: new Date() },
         });
 
-        // If we canceled a subscription, optionally create a free subscription
+        // When a subscription is canceled, user will have no active subscription
+        // You might want to implement your own logic here for what happens
+        // when users cancel (e.g., downgrade to basic features, show upgrade prompts, etc.)
         if (canceledSub.count > 0) {
-          const stripeCustomerId =
-            typeof subscription.customer === "string"
-              ? subscription.customer
-              : null;
-
-          let user = null;
-          if (subscription.metadata?.userId) {
-            user = await prisma.user.findUnique({
-              where: { id: subscription.metadata.userId },
-            });
-          }
-          if (!user && stripeCustomerId) {
-            user = await prisma.user.findFirst({ where: { stripeCustomerId } });
-          }
-
-          // Create a free subscription for the user
-          if (user) {
-            const freePlan = await prisma.plan.findFirst({
-              where: { name: "FREE" },
-            });
-
-            if (freePlan) {
-              await prisma.subscription.create({
-                data: {
-                  userId: user.id,
-                  planId: freePlan.id,
-                  status: "ACTIVE",
-                  currentPeriodStart: new Date(),
-                  currentPeriodEnd: new Date(
-                    Date.now() + 1000 * 60 * 60 * 24 * 30,
-                  ), // 30 days
-                },
-              });
-              console.log(
-                `Created free subscription for user ${user.id} after cancellation`,
-              );
-            }
-          }
+          console.log(
+            `Subscription ${subscription.id} has been canceled. User will have no active subscription.`,
+          );
         }
 
         break;

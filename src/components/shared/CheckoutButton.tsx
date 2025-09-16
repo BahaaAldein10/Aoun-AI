@@ -1,7 +1,10 @@
+// components/shared/CheckoutButton.tsx
 "use client";
 
 import { Button } from "@/components/ui/button";
 import { SupportedLang } from "@/lib/dictionaries";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
 import Spinner from "./Spinner";
@@ -33,31 +36,25 @@ export default function CheckoutButton({
   hasUserId,
   isEnterprise = false,
   isCurrentPlan = false,
+  hasActivePaidSubscription,
 }: CheckoutButtonProps) {
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
-  const handleEnterpriseContact = () => {
-    const email = contactEmail;
-    const subject = encodeURIComponent("Enterprise Plan Inquiry");
-    const body = encodeURIComponent(
-      lang === "ar"
-        ? "مرحباً،\n\nأرغب في معرفة المزيد عن الخطة المؤسسية.\n\nشكراً لكم."
-        : "Hello,\n\nI'm interested in learning more about your Enterprise plan.\n\nThank you.",
-    );
-    window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
-  };
-
-  const handleCheckout = async () => {
-    // Handle enterprise plans
+  const handleCheckout = () => {
+    // For enterprise plans, do nothing here - the link handles it
     if (isEnterprise) {
-      handleEnterpriseContact();
       return;
     }
 
-    // Do nothing if button is disabled and it's the current plan
-    if (disabled && isCurrentPlan) return;
+    // Async logic for paid plans
+    handlePaidCheckout();
+  };
 
-    // Do nothing if user is not logged in
+  const handlePaidCheckout = async () => {
+    // If explicitly disabled, prevent action
+    if (disabled) return;
+
     if (!hasUserId) {
       toast.error(
         lang === "ar"
@@ -70,36 +67,37 @@ export default function CheckoutButton({
     setLoading(true);
 
     try {
-      const response = await fetch("/api/stripe/create-checkout", {
+      // Use upgrade endpoint if user already has an active paid subscription
+      const endpoint = hasActivePaidSubscription
+        ? "/api/stripe/upgrade"
+        : "/api/stripe/create-checkout";
+
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ planId, lang }),
       });
 
       const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Something went wrong");
 
-      if (!response.ok) {
-        throw new Error(data.error || "Something went wrong");
-      }
-
+      // If we get a Stripe Checkout URL (new subscription flow)
       if (data.url) {
-        // Redirect to Stripe Checkout for new subscriptions
-        window.location.href = data.url;
-      } else {
-        // Show success message for free plan or immediate actions
-        toast.success(
-          data.message ||
-            (lang === "ar"
-              ? "تم تحديث الخطة بنجاح!"
-              : "Plan updated successfully!"),
-        );
-        // Reload the page to show updated state
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
+        return router.push(data.url);
       }
+
+      // If upgrade endpoint returned a hosted invoice URL (customer needs to pay)
+      if (data.invoiceUrl) {
+        return router.push(data.invoiceUrl);
+      }
+
+      // Otherwise assume server handled the upgrade immediately
+      toast.success(
+        lang === "ar" ? "تم تحديث الخطة بنجاح!" : "Plan updated successfully!",
+      );
+      setTimeout(() => router.refresh(), 1300);
     } catch (error) {
-      console.error("Checkout error:", error);
+      console.error("Checkout/Upgrade error:", error);
       toast.error(
         error instanceof Error
           ? error.message
@@ -126,10 +124,54 @@ export default function CheckoutButton({
     return variant;
   };
 
+  // Check if button should be disabled
+  const shouldDisable = () => {
+    if (disabled) return true;
+    if (isCurrentPlan && disabled) return true; // defensive
+    if (loading && !isEnterprise) return true;
+    return false;
+  };
+
+  // For enterprise plans, create the mailto link
+  if (isEnterprise) {
+    const subject = encodeURIComponent("Enterprise Plan Inquiry");
+    const body = encodeURIComponent(
+      lang === "ar"
+        ? "مرحباً،\n\nأرغب في معرفة المزيد عن خطة الأعمال.\n\nشكراً لكم."
+        : "Hello,\n\nI'm interested in learning more about your Enterprise plan.\n\nThank you.",
+    );
+    const mailtoLink = `mailto:${contactEmail}?subject=${subject}&body=${body}`;
+
+    return (
+      <Link
+        href={mailtoLink}
+        className="w-full"
+        target="_self"
+        rel="noopener noreferrer"
+      >
+        <Button
+          disabled={shouldDisable()}
+          variant={getButtonVariant()}
+          className={`w-full ${popular ? "shadow-lg" : ""}`}
+          size="lg"
+          asChild
+        >
+          <span>
+            {getButtonIcon()}
+            <span className={getButtonIcon() ? "ml-2" : ""}>
+              {getButtonText()}
+            </span>
+          </span>
+        </Button>
+      </Link>
+    );
+  }
+
+  // For non-enterprise plans, use the regular button
   return (
     <Button
       onClick={handleCheckout}
-      disabled={(disabled && isCurrentPlan) || (loading && !isEnterprise)}
+      disabled={shouldDisable()}
       variant={getButtonVariant()}
       className={`w-full ${popular ? "shadow-lg" : ""}`}
       size="lg"

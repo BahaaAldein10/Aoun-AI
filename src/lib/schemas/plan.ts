@@ -1,7 +1,7 @@
 import * as z from "zod";
 
 export const planSchema = z.object({
-  name: z.enum(["FREE", "STARTER", "PRO", "ENTERPRISE"]),
+  name: z.enum(["MAINTENANCE", "FREE", "STARTER", "PRO", "ENTERPRISE"]),
   titleEn: z.string().min(1, "English title is required"),
   titleAr: z.string().min(1, "العنوان بالعربية مطلوب"),
   descriptionEn: z.string().optional(),

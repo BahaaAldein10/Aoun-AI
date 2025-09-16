@@ -70,6 +70,7 @@ enum BlogStatus {
 }
 
 enum PlanName {
+  MAINTENANCE
   FREE
   STARTER
   PRO
@@ -275,7 +276,7 @@ model Integration {
  */
 model Plan {
   id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  name            PlanName @default(FREE) @unique // Remove lang from unique constraint
+  name            PlanName @default(MAINTENANCE) @unique
   
   // Multilingual fields
   titleEn         String
