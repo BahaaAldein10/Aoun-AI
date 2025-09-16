@@ -41,7 +41,7 @@ export default function CheckoutButton({
     const subject = encodeURIComponent("Enterprise Plan Inquiry");
     const body = encodeURIComponent(
       lang === "ar"
-        ? "مرحباً،\n\nأرغب في معرفة المزيد عن الخطة المؤسسية.\n\nشكراً لكم."
+        ? "مرحباً،\n\nأرغب في معرفة المزيد عن خطة الأعمال.\n\nشكراً لكم."
         : "Hello,\n\nI'm interested in learning more about your Enterprise plan.\n\nThank you.",
     );
     window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
@@ -82,16 +82,16 @@ export default function CheckoutButton({
         throw new Error(data.error || "Something went wrong");
       }
 
+      // All paid plans should redirect to Stripe Checkout
       if (data.url) {
         // Redirect to Stripe Checkout for new subscriptions
         window.location.href = data.url;
       } else {
-        // Show success message for free plan or immediate actions
+        // This shouldn't happen with paid plans, but handle gracefully
         toast.success(
-          data.message ||
-            (lang === "ar"
-              ? "تم تحديث الخطة بنجاح!"
-              : "Plan updated successfully!"),
+          lang === "ar"
+            ? "تم تحديث الخطة بنجاح!"
+            : "Plan updated successfully!",
         );
         // Reload the page to show updated state
         setTimeout(() => {
@@ -126,10 +126,17 @@ export default function CheckoutButton({
     return variant;
   };
 
+  // Check if button should be disabled
+  const shouldDisable = () => {
+    if (isCurrentPlan && disabled) return true;
+    if (loading && !isEnterprise) return true;
+    return false;
+  };
+
   return (
     <Button
       onClick={handleCheckout}
-      disabled={(disabled && isCurrentPlan) || (loading && !isEnterprise)}
+      disabled={shouldDisable()}
       variant={getButtonVariant()}
       className={`w-full ${popular ? "shadow-lg" : ""}`}
       size="lg"

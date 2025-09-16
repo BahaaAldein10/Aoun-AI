@@ -58,44 +58,7 @@ export async function POST(request: Request) {
 
     const currentSubscription = user.subscriptions[0];
 
-    // FREE plan handling
-    if (targetPlan.name === "FREE") {
-      // Cancel existing paid subscription if any
-      if (currentSubscription?.stripeSubscriptionId) {
-        await stripe.subscriptions.update(
-          currentSubscription.stripeSubscriptionId,
-          {
-            cancel_at_period_end: true,
-          },
-        );
-
-        await prisma.subscription.update({
-          where: { id: currentSubscription.id },
-          data: { status: "CANCELED", updatedAt: new Date() },
-        });
-      }
-
-      // Create new free subscription
-      await prisma.subscription.create({
-        data: {
-          userId: user.id,
-          planId: targetPlan.id,
-          status: "ACTIVE",
-          currentPeriodStart: new Date(),
-          currentPeriodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30), // 30 days
-        },
-      });
-
-      return NextResponse.json({
-        url: null,
-        message:
-          lang === "ar"
-            ? "تم التبديل إلى الخطة المجانية"
-            : "Switched to free plan",
-      });
-    }
-
-    // Paid plan: require a stripePriceId
+    // All plans now require a stripePriceId since there's no FREE plan
     const stripePriceId = targetPlan.stripePriceId;
     if (!stripePriceId) {
       console.error("Plan missing stripePriceId", { planId: targetPlan.id });
