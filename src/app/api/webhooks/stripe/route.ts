@@ -2,6 +2,7 @@
 // app/api/stripe/webhook/route.ts
 import { prisma } from "@/lib/prisma";
 import { resolvePlanIdFromStripeSubscription } from "@/lib/stripe/resolvePlanFromStripe";
+import { SubscriptionStatus } from "@prisma/client";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 
@@ -343,41 +344,83 @@ export async function POST(req: Request) {
           break;
         }
 
-        const updateData: any = {
+        const updateData = {
           planId,
-          status,
+          status: status as SubscriptionStatus,
           currentPeriodStart,
           currentPeriodEnd,
           updatedAt: new Date(),
         };
 
-        const updated = await prisma.subscription.updateMany({
-          where: { stripeSubscriptionId: subscription.id },
-          data: updateData,
+        console.log(`Processing subscription update for ${subscription.id}:`, {
+          userId: user.id,
+          planId,
+          status,
+          eventType: event.type,
         });
 
-        if (updated.count === 0) {
-          // If this is a new subscription, cancel any existing active ones for this user
-          await prisma.subscription.updateMany({
-            where: {
-              userId: user.id,
-              status: { in: ["ACTIVE", "TRIALING"] },
-            },
-            data: { status: "CANCELED", updatedAt: new Date() },
+        // Use a transaction to ensure atomicity
+        await prisma.$transaction(async (tx) => {
+          // First, try to update existing subscription
+          const updated = await tx.subscription.updateMany({
+            where: { stripeSubscriptionId: subscription.id },
+            data: updateData,
           });
 
-          await prisma.subscription.create({
-            data: {
-              userId: user.id,
-              planId,
-              stripeSubscriptionId: subscription.id,
-              status,
-              currentPeriodStart,
-              currentPeriodEnd,
-            },
-          });
-        }
+          console.log(`Updated ${updated.count} existing subscriptions`);
 
+          if (updated.count === 0) {
+            // This is a completely new subscription
+            console.log("Creating new subscription record");
+
+            // Cancel any existing active subscriptions for this user
+            const canceled = await tx.subscription.updateMany({
+              where: {
+                userId: user.id,
+                status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+              },
+              data: { status: "CANCELED", updatedAt: new Date() },
+            });
+
+            console.log(`Canceled ${canceled.count} existing subscriptions`);
+
+            // Create the new subscription
+            await tx.subscription.create({
+              data: {
+                userId: user.id,
+                planId,
+                stripeSubscriptionId: subscription.id,
+                status,
+                currentPeriodStart,
+                currentPeriodEnd,
+              },
+            });
+          } else {
+            // This was an update to existing subscription (like an upgrade)
+            console.log("Updated existing subscription");
+
+            // For upgrades, we might want to cancel any OTHER active subscriptions
+            // (in case user somehow has multiple active subscriptions)
+            const canceled = await tx.subscription.updateMany({
+              where: {
+                userId: user.id,
+                status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
+                stripeSubscriptionId: { not: subscription.id }, // Don't cancel the one we just updated
+              },
+              data: { status: "CANCELED", updatedAt: new Date() },
+            });
+
+            if (canceled.count > 0) {
+              console.log(
+                `Canceled ${canceled.count} other active subscriptions during upgrade`,
+              );
+            }
+          }
+        });
+
+        console.log(
+          `Subscription ${event.type} processed: ${subscription.id} for user ${user.id}, plan ${planId}`,
+        );
         break;
       }
 

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { PlanName } from "@prisma/client";
+import { PlanName } from "@prisma/client";
 import Stripe from "stripe";
 
 /**
@@ -13,19 +13,16 @@ import Stripe from "stripe";
 export async function resolvePlanIdFromStripeSubscription(
   subscription: Stripe.Subscription,
 ): Promise<string | null> {
-  // 1) metadata.planId
-  const planIdFromMeta = subscription.metadata?.planId as string | undefined;
-  if (planIdFromMeta) {
-    const p = await prisma.plan.findUnique({ where: { id: planIdFromMeta } });
-    if (p) return p.id;
-  }
+  // 1) price id from first item (most reliable)
+  const firstItem = subscription.items?.data?.[0];
+  const priceObj = firstItem?.price;
+  let priceId: string | null = null;
 
-  // 2) price id from first item (most reliable)
-  const priceId =
-    subscription.items?.data?.[0]?.price?.id ??
-    // defensive fallback shapes
-    (subscription.items?.data?.[0]?.price as Stripe.Price) ??
-    null;
+  if (typeof priceObj === "string") {
+    priceId = priceObj;
+  } else if (priceObj && typeof priceObj === "object" && "id" in priceObj) {
+    priceId = (priceObj as Stripe.Price).id;
+  }
 
   if (priceId) {
     const p = await prisma.plan.findFirst({
@@ -34,11 +31,18 @@ export async function resolvePlanIdFromStripeSubscription(
     if (p) return p.id;
   }
 
-  // 3) metadata.planName only (no longer need lang)
-  const planName = subscription.metadata?.planName as PlanName | undefined;
+  // 2) metadata.planId (fallback)
+  const planIdFromMeta = subscription.metadata?.planId as string | undefined;
+  if (planIdFromMeta) {
+    const p = await prisma.plan.findUnique({ where: { id: planIdFromMeta } });
+    if (p) return p.id;
+  }
+
+  // 3) metadata.planName only (fallback)
+  const planName = subscription.metadata?.planName as PlanName;
   if (planName) {
     const p = await prisma.plan.findUnique({
-      where: { name: planName }, // Simple unique lookup by name
+      where: { name: planName },
     });
     if (p) return p.id;
   }

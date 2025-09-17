@@ -129,63 +129,41 @@ export async function POST(req: Request) {
     const newPriceId = targetPlan.stripePriceId;
 
     // Perform the subscription update (swap price on the existing subscription)
-    const updated = (await stripe.subscriptions.update(subscription.id, {
+    const updated = await stripe.subscriptions.update(subscription.id, {
       items: [{ id: subscriptionItemId, price: newPriceId, quantity: 1 }],
-      // Choose your proration behavior:
-      // - "create_prorations" (creates proration items; may not invoice immediately)
-      // - "always_invoice" (create prorations and attempt to invoice immediately)
-      // - "none" (no prorations)
       proration_behavior: "create_prorations",
-      expand: ["latest_invoice"],
-    })) as Stripe.Subscription & {
-      current_period_start?: number;
-      current_period_end?: number;
-    };
+      metadata: {
+        ...(subscription.metadata ?? {}),
+        planId: targetPlan.id,
+        planName: targetPlan.name,
+      },
+      expand: ["latest_invoice", "items.data.price"],
+    });
 
-    // If Stripe created an invoice that requires customer payment, return hosted invoice URL if present
     const latestInvoice = updated.latest_invoice as Stripe.Invoice | undefined;
+
+    // Check if payment is required
     if (
       latestInvoice &&
       typeof latestInvoice !== "string" &&
+      latestInvoice.status !== "paid" &&
       latestInvoice.hosted_invoice_url
     ) {
-      // Return hosted invoice url so frontend can redirect the user to pay/complete SCA
+      // Payment required - redirect to hosted invoice
       return NextResponse.json({
+        status: "payment_required",
         invoiceUrl: latestInvoice.hosted_invoice_url,
       });
     }
 
-    // Update DB subscription record (best-effort)
-    await prisma.subscription.updateMany({
-      where: { stripeSubscriptionId: updated.id },
-      data: {
-        planId: targetPlan.id,
-        status: mapStripeStatusToPrisma(updated.status),
-        currentPeriodStart: updated.current_period_start
-          ? new Date(updated.current_period_start * 1000)
-          : null,
-        currentPeriodEnd: updated.current_period_end
-          ? new Date(updated.current_period_end * 1000)
-          : null,
-        updatedAt: new Date(),
-      },
-    });
-
-    // Mark any other old DB subscriptions as canceled for UI consistency
-    await prisma.subscription.updateMany({
-      where: {
-        userId: user.id,
-        stripeSubscriptionId: { not: updated.id },
-        status: { in: ["ACTIVE", "TRIALING"] },
-      },
-      data: { status: "CANCELED", updatedAt: new Date() },
-    });
-
+    // Payment succeeded or no payment required - upgrade complete
     return NextResponse.json({
-      ok: true,
+      status: "success",
+      message: "Upgrade completed successfully",
       subscription: {
         id: updated.id,
         status: mapStripeStatusToPrisma(updated.status),
+        planId: targetPlan.id,
       },
     });
   } catch (error) {

@@ -3,7 +3,6 @@
 
 import { Button } from "@/components/ui/button";
 import { SupportedLang } from "@/lib/dictionaries";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import toast from "react-hot-toast";
@@ -42,8 +41,8 @@ export default function CheckoutButton({
   const router = useRouter();
 
   const handleCheckout = () => {
-    // For enterprise plans, do nothing here - the link handles it
     if (isEnterprise) {
+      handleEnterpriseContact();
       return;
     }
 
@@ -51,9 +50,29 @@ export default function CheckoutButton({
     handlePaidCheckout();
   };
 
+  const handleEnterpriseContact = async () => {
+    try {
+      await navigator.clipboard.writeText(contactEmail);
+      toast.success(
+        lang === "ar"
+          ? `تم نسخ البريد الإلكتروني: ${contactEmail}`
+          : `Email copied to clipboard: ${contactEmail}`,
+        { duration: 4000 },
+      );
+    } catch (error) {
+      console.warn("Copy to clipboard failed:", error);
+      toast.error(
+        lang === "ar"
+          ? `يُرجى التواصل معنا على: ${contactEmail}`
+          : `Please contact us at: ${contactEmail}`,
+        { duration: 6000 },
+      );
+    }
+  };
+
   const handlePaidCheckout = async () => {
     // If explicitly disabled, prevent action
-    if (disabled) return;
+    if (disabled || loading) return;
 
     if (!hasUserId) {
       toast.error(
@@ -81,21 +100,44 @@ export default function CheckoutButton({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Something went wrong");
 
-      // If we get a Stripe Checkout URL (new subscription flow)
+      // Handle new subscription flow (create-checkout endpoint)
       if (data.url) {
         return router.push(data.url);
       }
 
-      // If upgrade endpoint returned a hosted invoice URL (customer needs to pay)
-      if (data.invoiceUrl) {
-        return router.push(data.invoiceUrl);
-      }
+      // Handle upgrade flow responses
+      if (hasActivePaidSubscription) {
+        if (data.status === "success") {
+          // Upgrade completed successfully
+          toast.success(
+            lang === "ar"
+              ? "تم تحديث الخطة بنجاح!"
+              : "Plan upgraded successfully!",
+          );
 
-      // Otherwise assume server handled the upgrade immediately
-      toast.success(
-        lang === "ar" ? "تم تحديث الخطة بنجاح!" : "Plan updated successfully!",
-      );
-      setTimeout(() => router.refresh(), 1300);
+          // Refresh the page to show updated subscription
+          setTimeout(() => {
+            router.refresh();
+          }, 2000);
+        } else if (data.status === "payment_required" && data.invoiceUrl) {
+          // Payment required - redirect to Stripe invoice page
+          toast.loading(
+            lang === "ar"
+              ? "إعادة توجيه إلى صفحة الدفع..."
+              : "Redirecting to payment page...",
+          );
+
+          setTimeout(() => {
+            window.location.href = data.invoiceUrl;
+          }, 1000);
+        } else {
+          // Fallback for any other upgrade response
+          throw new Error(data.message || "Upgrade failed");
+        }
+      } else {
+        // Fallback for create-checkout without URL (shouldn't happen)
+        throw new Error("No checkout URL received");
+      }
     } catch (error) {
       console.error("Checkout/Upgrade error:", error);
       toast.error(
@@ -132,48 +174,12 @@ export default function CheckoutButton({
     return false;
   };
 
-  // For enterprise plans, create the mailto link
-  if (isEnterprise) {
-    const subject = encodeURIComponent("Enterprise Plan Inquiry");
-    const body = encodeURIComponent(
-      lang === "ar"
-        ? "مرحباً،\n\nأرغب في معرفة المزيد عن خطة الأعمال.\n\nشكراً لكم."
-        : "Hello,\n\nI'm interested in learning more about your Enterprise plan.\n\nThank you.",
-    );
-    const mailtoLink = `mailto:${contactEmail}?subject=${subject}&body=${body}`;
-
-    return (
-      <Link
-        href={mailtoLink}
-        className="w-full"
-        target="_self"
-        rel="noopener noreferrer"
-      >
-        <Button
-          disabled={shouldDisable()}
-          variant={getButtonVariant()}
-          className={`w-full ${popular ? "shadow-lg" : ""}`}
-          size="lg"
-          asChild
-        >
-          <span>
-            {getButtonIcon()}
-            <span className={getButtonIcon() ? "ml-2" : ""}>
-              {getButtonText()}
-            </span>
-          </span>
-        </Button>
-      </Link>
-    );
-  }
-
-  // For non-enterprise plans, use the regular button
   return (
     <Button
       onClick={handleCheckout}
       disabled={shouldDisable()}
       variant={getButtonVariant()}
-      className={`w-full ${popular ? "shadow-lg" : ""}`}
+      className={`w-full ${shouldDisable() ? "cursor-not-allowed" : ""} ${popular ? "shadow-lg" : ""}`}
       size="lg"
     >
       {getButtonIcon()}

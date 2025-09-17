@@ -60,10 +60,6 @@ const PricingPage = async ({ params }: Props) => {
     orderBy: { priceAmount: "asc" },
   });
 
-  const getCurrentPlanName = () => {
-    return currentSubscription?.plan?.name || "FREE";
-  };
-
   const contactEmail = await getSiteContent({ lang }).then(
     (res) => res?.footer?.contactEmail ?? "",
   );
