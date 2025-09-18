@@ -39,17 +39,24 @@ import {
   Upload,
   Wand2,
 } from "lucide-react";
-import React, { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import React, { useEffect, useRef, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import toast from "react-hot-toast";
 import Spinner from "../shared/Spinner";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { KbMetadata } from "./KnowledgeBaseClient";
 import VoiceIntegrationTab, { availableVoices } from "./VoiceIntegrationTab";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { useRouter } from "next/navigation";
 
 type initialKb = KnowledgeBase & {
   documents: Document[];
+  bot: { id: string } | null;
 };
 
 const MAX_FILES = 5;
@@ -72,6 +79,7 @@ const SetupClient = ({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [hasChanges, setHasChanges] = useState<boolean>(false);
   const router = useRouter();
 
   const t = dict.dashboard_setup;
@@ -110,6 +118,7 @@ const SetupClient = ({
     getValues,
     setValue,
     watch,
+    reset,
   } = form;
 
   const { fields, append, remove } = useFieldArray({
@@ -118,6 +127,62 @@ const SetupClient = ({
   });
 
   const existingFormFiles = watch("files") || [];
+
+  const watched = watch([
+    "botName",
+    "botDescription",
+    "agentLanguage",
+    "url",
+    "personality",
+    "voice",
+    "primaryColor",
+    "accentColor",
+    "faq",
+    "files",
+    "allowedOrigins",
+  ]);
+
+  // helper to get the "baseline" values from initialKb (or defaults)
+  const getInitialSnapshot = () => {
+    const meta = (initialKb?.metadata as KbMetadata) || ({} as KbMetadata);
+
+    return {
+      botName: initialKb?.title || "",
+      botDescription: initialKb?.description || "",
+      agentLanguage: meta?.language || (form.getValues("agentLanguage") ?? ""),
+      url: meta?.url ?? "",
+      personality: meta?.personality ?? "",
+      voice: meta?.voice ?? availableVoices[0].name,
+      primaryColor: meta?.primaryColor ?? "#29ABE2",
+      accentColor: meta?.accentColor ?? "#29E2C2",
+      faq: meta?.faq ?? [{ question: "", answer: "" }],
+      files: meta?.files ?? [],
+      allowedOrigins: meta?.allowedOrigins ?? [],
+    };
+  };
+
+  useEffect(() => {
+    const current = {
+      botName: form.getValues("botName") ?? "",
+      botDescription: form.getValues("botDescription") ?? "",
+      agentLanguage: form.getValues("agentLanguage") ?? "",
+      url: form.getValues("url") ?? "",
+      personality: form.getValues("personality") ?? "",
+      voice: form.getValues("voice") ?? availableVoices[0].name,
+      primaryColor: form.getValues("primaryColor") ?? "#29ABE2",
+      accentColor: form.getValues("accentColor") ?? "#29E2C2",
+      faq: form.getValues("faq") ?? [{ question: "", answer: "" }],
+      files: form.getValues("files") ?? [],
+      allowedOrigins: form.getValues("allowedOrigins") ?? [],
+    };
+
+    const initial = getInitialSnapshot();
+
+    const changed = !isEqual(current, initial);
+
+    setHasChanges(changed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(watched)]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -293,18 +358,16 @@ const SetupClient = ({
       language: values.agentLanguage as SupportedLang,
     };
 
-
     try {
       let res;
 
       if (hasKb) {
         // Update existing knowledge base
-        res = await updateKb({
+        res = await updateKb(initialKb?.bot?.id as string, {
           ...metadata,
           title: values.botName,
           description: values.botDescription,
         });
-        router.push(`/${lang}/dashboard/knowledge-base/${res.kb.id}`);
         toast.success(t.kb_updated);
       } else {
         // Create new knowledge base
@@ -313,7 +376,6 @@ const SetupClient = ({
           title: values.botName,
           description: values.botDescription,
         });
-        router.push(`/${lang}/dashboard/knowledge-base/${res.kb.id}`);
         toast.success(t.kb_created);
       }
 
@@ -325,6 +387,26 @@ const SetupClient = ({
       );
 
       if (unchangedUrl && unchangedFiles) {
+        if (res?.kb) {
+          const kbMeta = (res.kb.metadata as KbMetadata) || ({} as KbMetadata);
+
+          const newDefaults: SetupFormValues = {
+            botName: res.kb.title || "",
+            botDescription: res.kb.description || "",
+            agentLanguage: kbMeta?.language ?? "en",
+            url: kbMeta?.url ?? "",
+            personality: kbMeta?.personality ?? "",
+            voice: kbMeta?.voice ?? availableVoices[0].name,
+            primaryColor: kbMeta?.primaryColor ?? "#29ABE2",
+            accentColor: kbMeta?.accentColor ?? "#29E2C2",
+            faq: kbMeta?.faq ?? [{ question: "", answer: "" }],
+            files: kbMeta?.files ?? [],
+            allowedOrigins: kbMeta?.allowedOrigins ?? [],
+          };
+
+          reset(newDefaults);
+          setHasChanges(false);
+        }
         return res;
       }
 
@@ -343,6 +425,7 @@ const SetupClient = ({
                 "{{count}}",
                 processingResult.filesProcessing.toString(),
               ),
+              { duration: 6000 },
             );
           } else if (processingResult.urlProcessing) {
             toast.success(t.processing_url);
@@ -352,6 +435,7 @@ const SetupClient = ({
                 "{{count}}",
                 processingResult.filesProcessing.toString(),
               ),
+              { duration: 6000 },
             );
           }
         } catch (processingError) {
@@ -362,6 +446,30 @@ const SetupClient = ({
           toast.error(t.processing_failed);
         }
       }
+
+      // --- make form pristine with saved values ---
+      if (res?.kb) {
+        const kbMeta = (res.kb.metadata as KbMetadata) || ({} as KbMetadata);
+
+        const newDefaults: SetupFormValues = {
+          botName: res.kb.title || "",
+          botDescription: res.kb.description || "",
+          agentLanguage: kbMeta?.language ?? "en",
+          url: kbMeta?.url ?? "",
+          personality: kbMeta?.personality ?? "",
+          voice: kbMeta?.voice ?? availableVoices[0].name,
+          primaryColor: kbMeta?.primaryColor ?? "#29ABE2",
+          accentColor: kbMeta?.accentColor ?? "#29E2C2",
+          faq: kbMeta?.faq ?? [{ question: "", answer: "" }],
+          files: kbMeta?.files ?? [],
+          allowedOrigins: kbMeta?.allowedOrigins ?? [],
+        };
+
+        reset(newDefaults);
+        setHasChanges(false);
+      }
+
+      router.push(`/${lang}/dashboard/knowledge-base/${res.kb.id}`);
 
       return res;
     } catch (error: unknown) {
@@ -897,7 +1005,7 @@ const SetupClient = ({
 
               <CardFooter className="px-0 pt-6">
                 <div className="flex justify-end">
-                  <Button type="submit" disabled={isSubmitting}>
+                  <Button type="submit" disabled={isSubmitting || !hasChanges}>
                     {isSubmitting ? (
                       <>
                         <Spinner /> {hasKb ? t.updating : t.generating}

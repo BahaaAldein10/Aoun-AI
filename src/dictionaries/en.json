@@ -386,7 +386,7 @@
     "processing_url_and_files": "Started processing URL and {{count}} file(s). This may take a few minutes.",
     "processing_url": "Started web crawling. This may take a few minutes.",
     "processing_files": "Started processing {{count}} file(s). This may take a few minutes.",
-    "processing_failed": "Knowledge Base created but failed to start processing. You can try refreshing or contact support.",
+    "processing_failed": "Processing failed to start. You can retry from the KB page.",
     "network_error": "Network error. Please check your connection and try again.",
     "validation_error": "Invalid input data. Please check your entries and try again.",
     "unexpected_error": "An unexpected error occurred. Please try again.",

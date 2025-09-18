@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
     if (!kbData) {
       const kb = await prisma.knowledgeBase.findUnique({
         where: { id: kbId },
-        select: { id: true, userId: true, botId: true, metadata: true },
+        select: { id: true, userId: true, bot: { select: { id: true } }, metadata: true },
       });
 
       if (!kb) {
@@ -197,7 +197,7 @@ export async function POST(request: NextRequest) {
       kbData = {
         id: kb.id,
         userId: kb.userId,
-        botId: kb.botId ?? null,
+        botId: kb.bot?.id,
         metadata: kb.metadata as unknown as KbMetadata & {
           apiKeyHash?: string;
         },
@@ -522,7 +522,7 @@ export async function POST(request: NextRequest) {
       // 1) update aggregatedUsage and create minimal usage audit row (via helper)
       await logInteraction({
         userId: kbData.userId,
-        botId: kbData.botId,
+        botId: kbData.botId!,
         channel: "voice",
         interactions: 1,
         minutes,

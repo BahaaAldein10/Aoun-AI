@@ -194,7 +194,7 @@ export async function POST(request: NextRequest) {
         title: true,
         metadata: true,
         userId: true,
-        botId: true,
+        bot: { select: { id: true } },
       },
     });
 
@@ -213,7 +213,7 @@ export async function POST(request: NextRequest) {
       id: kb.id,
       title: kb.title,
       userId: kb.userId,
-      botId: kb.botId,
+      botId: kb.bot?.id,
       metadata: (kb.metadata as Record<string, any>) ?? {},
     };
 
@@ -300,7 +300,7 @@ export async function POST(request: NextRequest) {
         try {
           await logInteraction({
             userId: kbData.userId,
-            botId: kbData.botId ?? null,
+            botId: kbData.botId!,
             channel: "voice",
             interactions: 1,
             minutes,
@@ -465,7 +465,7 @@ export async function POST(request: NextRequest) {
       try {
         await logInteraction({
           userId: kbData.userId,
-          botId: kbData.botId ?? null,
+          botId: kbData.botId!,
           channel: "voice",
           interactions: 1,
           minutes,

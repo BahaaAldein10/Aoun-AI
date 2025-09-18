@@ -111,45 +111,50 @@ export async function createKb(params: CreateKbParams) {
   if (!userId) throw new Error("Not authenticated");
 
   try {
+    const kb = await prisma.knowledgeBase.create({
+      data: {
+        title,
+        description,
+        userId,
+        metadata: {
+          personality,
+          voice,
+          primaryColor,
+          accentColor,
+          faq,
+          url,
+          files,
+          allowedOrigins,
+          language,
+        },
+      },
+    });
+
     const bot = await prisma.bot.create({
       data: {
         name: title,
         userId,
         description,
         status: "DEPLOYED",
-        knowledgeBases: {
-          create: {
-            title,
-            description,
-            userId,
-            metadata: {
-              personality,
-              voice,
-              primaryColor,
-              accentColor,
-              faq,
-              url,
-              files,
-              allowedOrigins,
-              language,
-            },
-          },
-        },
-      },
-      include: {
-        knowledgeBases: true,
+        knowledgeBaseId: kb.id,
       },
     });
 
-    const kb = bot.knowledgeBases[0];
-    return { bot, kb };
+    const updatedKb = await prisma.knowledgeBase.update({
+      where: { id: kb.id },
+      data: {
+        bot: { connect: { id: bot.id } },
+      },
+    });
+
+    return { bot, kb: updatedKb };
   } catch (error) {
-    console.log(error);
+    console.error(error);
     throw new Error("Failed to create Knowledge Base");
   }
 }
 
-export async function updateKb(params: CreateKbParams) {
+export async function updateKb(botId: string, params: CreateKbParams) {
   const {
     title,
     description,
@@ -169,19 +174,23 @@ export async function updateKb(params: CreateKbParams) {
     const userId = session?.user?.id;
     if (!userId) throw new Error("Not authenticated");
 
-    const existingKb = await prisma.knowledgeBase.findFirst({
-      where: { userId },
+    const bot = await prisma.bot.findUnique({
+      where: { id: botId, userId },
+      include: { knowledgeBase: true },
     });
-    if (!existingKb) throw new Error("Knowledge Base not found");
 
-    const [kb, bot] = await prisma.$transaction([
+    if (!bot || !bot.knowledgeBase) {
+      throw new Error("Bot or Knowledge Base not found");
+    }
+
+    // Update both in a transaction
+    const [updatedKb, updatedBot] = await prisma.$transaction([
       prisma.knowledgeBase.update({
-        where: { id: existingKb.id, userId },
+        where: { id: bot.knowledgeBase.id },
         data: {
           title,
           description,
           metadata: {
-            ...(existingKb.metadata as object),
             personality,
             voice,
             primaryColor,
@@ -195,7 +204,7 @@ export async function updateKb(params: CreateKbParams) {
         },
       }),
       prisma.bot.update({
-        where: { id: existingKb.botId! },
+        where: { id: bot.id },
         data: {
           ...(title && { name: title }),
           ...(description && { description }),
@@ -203,13 +212,10 @@ export async function updateKb(params: CreateKbParams) {
       }),
     ]);
 
-    return { kb, bot };
+    return { kb: updatedKb, bot: updatedBot };
   } catch (error) {
     console.error(error);
-    if (error instanceof Error) {
-      throw new Error(error.message);
-    }
-    throw new Error("Unexpected error occurred while updating Knowledge Base");
+    throw new Error("Failed to update Knowledge Base");
   }
 }
 

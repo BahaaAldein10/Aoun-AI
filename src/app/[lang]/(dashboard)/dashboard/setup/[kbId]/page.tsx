@@ -17,7 +17,7 @@ const SetupPage = async ({ params }: SetupPageProps) => {
 
   const kb = await prisma.knowledgeBase.findFirst({
     where: { userId, id: kbId },
-    include: { documents: true },
+    include: { documents: true, bot: { select: { id: true } } },
   });
 
   if (!kb) return notFound();

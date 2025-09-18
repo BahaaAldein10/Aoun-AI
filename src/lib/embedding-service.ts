@@ -10,7 +10,6 @@ const openai = new OpenAI({
 // Configuration
 const EMBEDDING_CONFIG = {
   model: "text-embedding-3-small", // More cost-effective, good quality
-  // model: "text-embedding-3-large", // Use this for higher quality if needed
   maxTokensPerChunk: 8000, // Conservative limit to avoid API errors
   chunkOverlap: 200, // Overlap between chunks to maintain context
   minChunkSize: 100, // Minimum chunk size to avoid very small embeddings

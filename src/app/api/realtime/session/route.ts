@@ -172,7 +172,7 @@ If you don't have specific information, politely explain that this is a demo and
         title: true,
         metadata: true,
         userId: true,
-        botId: true,
+        bot: { select: { id: true } },
       },
     });
 
@@ -284,7 +284,7 @@ Be conversational and natural in your responses while maintaining accuracy to th
         title: kbTitle,
         personality,
         userId: kb.userId,
-        botId: kb.botId,
+        botId: kb.bot?.id,
       },
     });
   } catch (err) {
