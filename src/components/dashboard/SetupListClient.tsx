@@ -157,11 +157,16 @@ const SetupListClient: React.FC<SetupListClientProps> = ({
 
         <div className="flex items-center gap-3">
           {getPlanBadge()}
-          <Button asChild disabled={!canCreateMore}>
-            <Link href={`/${lang}/dashboard/setup/new`}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t.create_agent || "Create Agent"}
-            </Link>
+          <Button
+            disabled={!canCreateMore}
+            onClick={() => {
+              if (canCreateMore) {
+                window.location.href = `/${lang}/dashboard/setup/new`;
+              }
+            }}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {t.create_agent || "Create Agent"}
           </Button>
         </div>
       </div>
