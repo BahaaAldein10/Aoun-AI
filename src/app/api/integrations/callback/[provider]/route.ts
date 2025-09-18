@@ -321,7 +321,12 @@ export async function GET(
       };
     }
 
-    const integrationType = getIntegrationType(provider, stateObj?.type);
+    const integrationType = getIntegrationType(
+      provider,
+      stateObj?.type,
+      stateObj?.channel,
+    );
+
 
     const providerToStore = provider === "facebook" ? channel : provider;
     await upsertIntegration(session.user.id, providerToStore, integrationType, {

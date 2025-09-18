@@ -98,7 +98,7 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
     setIsLoading(true);
     try {
       const res = await fetch(
-        `/api/integrations/oauth/whatsapp?type=messaging&lang=${lang}`,
+        `/api/integrations/oauth/${provider}?type=messaging&lang=${lang}`,
       );
       if (!res.ok) throw new Error("Could not get auth url");
       const { url } = await res.json();
@@ -108,10 +108,11 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
       toast.error(t.toast_error_generic ?? "Could not connect");
       setIsLoading(false);
     }
-  }, [lang, router, t]);
+  }, [provider, lang, router, t]);
 
   const handleDisconnect = useCallback(async () => {
     const typeToDisconnect = connectedApp?.type as IntegrationType;
+    const providerToDisconnect = connectedApp?.provider;
 
     setIsLoading(true);
     try {
@@ -121,7 +122,7 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          provider: "facebook",
+          provider: providerToDisconnect,
           type: typeToDisconnect,
         }),
       });
@@ -142,6 +143,7 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
     }
   }, [
     connectedApp?.type,
+    connectedApp?.provider,
     t.toast_success_title,
     t.toast_error_generic,
     router,
@@ -166,13 +168,6 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
             `Integrate with ${details.title} to manage conversations`}
         </CardDescription>
       </CardHeader>
-
-      <CardContent>
-        <p className="text-muted-foreground text-sm">
-          {t.messaging_card_setup ||
-            "Set up this integration to start receiving and sending messages"}
-        </p>
-      </CardContent>
 
       <CardFooter className={isRTL ? "flex-row-reverse justify-end" : ""}>
         {!isConnected ? (

@@ -38,6 +38,16 @@ const getDecryptedTokens = (encryptedToken: string): TokenData => {
   return JSON.parse(decrypted);
 };
 
+const facebookRevoke: RevocationHandler = async (tokenData) => {
+  if (!tokenData.access_token) return;
+  await fetch(
+    `https://graph.facebook.com/me/permissions?access_token=${encodeURIComponent(
+      tokenData.access_token,
+    )}`,
+    { method: "DELETE" },
+  );
+};
+
 const revocationHandlers: Record<string, RevocationHandler> = {
   google: async (tokenData: TokenData) => {
     const tokenToRevoke = tokenData.refresh_token ?? tokenData.access_token;
@@ -60,15 +70,11 @@ const revocationHandlers: Record<string, RevocationHandler> = {
     });
   },
 
-  facebook: async (tokenData: TokenData) => {
-    if (!tokenData.access_token) return;
-
-    // Remove app permissions
-    await fetch(
-      `https://graph.facebook.com/me/permissions?access_token=${encodeURIComponent(tokenData.access_token)}`,
-      { method: "DELETE" },
-    );
-  },
+  // map facebook + channel keys to same handler:
+  facebook: facebookRevoke,
+  whatsapp: facebookRevoke,
+  messenger: facebookRevoke,
+  instagram: facebookRevoke,
 
   salesforce: async (tokenData: TokenData) => {
     const tokenToRevoke = tokenData.refresh_token ?? tokenData.access_token;
