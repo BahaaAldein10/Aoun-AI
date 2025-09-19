@@ -6,10 +6,41 @@ import { notifyUserProcessingDone } from "@/lib/notifier";
 import { prisma } from "@/lib/prisma";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 
+async function shouldSendCompletionNotification(
+  kbId: string,
+): Promise<boolean> {
+  // Check if all documents in the KB have embeddings
+  const stats = await prisma.knowledgeBase.findUnique({
+    where: { id: kbId },
+    select: {
+      _count: {
+        select: {
+          documents: {
+            where: { content: { not: null } },
+          },
+        },
+      },
+    },
+  });
+
+  const documentsWithEmbeddings = await prisma.document.count({
+    where: {
+      kbId,
+      content: { not: null },
+      embedding: { some: {} },
+    },
+  });
+
+  const totalDocuments = stats?._count.documents || 0;
+
+  // Send notification if all documents now have embeddings
+  return totalDocuments > 0 && documentsWithEmbeddings === totalDocuments;
+}
+
 async function handler(req: Request) {
   try {
     const payload = await req.json();
-    const { kbId, documentId, userId } = payload;
+    const { kbId, documentId, userId, webUrl } = payload;
 
     if (!kbId || !userId) {
       return new Response(
@@ -64,7 +95,7 @@ async function handler(req: Request) {
 
     try {
       if (documentId) {
-        // Process specific document
+        // Process specific document by ID
         console.log(
           `Processing embeddings for specific document: ${documentId}`,
         );
@@ -92,20 +123,87 @@ async function handler(req: Request) {
 
         // Count embeddings before
         const embeddingsBefore = await prisma.embedding.count({
-          where: { kbId },
+          where: { kbId, documentId },
         });
 
         await processDocumentEmbeddings(documentId);
 
         // Count embeddings after
         const embeddingsAfter = await prisma.embedding.count({
-          where: { kbId },
+          where: { kbId, documentId },
+        });
+
+        processedDocuments = 1;
+        createdEmbeddings = embeddingsAfter - embeddingsBefore;
+      } else if (webUrl) {
+        // Process document by webUrl (for crawled pages)
+        console.log(`Processing embeddings for document with URL: ${webUrl}`);
+
+        // Find document by sourceUrl
+        const document = await prisma.document.findFirst({
+          where: {
+            kbId,
+            sourceUrl: webUrl,
+          },
+          select: { id: true, filename: true, sourceUrl: true },
+        });
+
+        if (!document) {
+          console.warn(
+            `Document with URL ${webUrl} not found yet, skipping...`,
+          );
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: "Document not found yet, will retry later",
+              skipped: true,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        // Check if this document already has embeddings
+        const existingEmbeddings = await prisma.embedding.findFirst({
+          where: { kbId, documentId: document.id },
+          select: { id: true },
+        });
+
+        if (existingEmbeddings) {
+          console.log(
+            `Document ${document.id} already has embeddings, skipping...`,
+          );
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: "Document already has embeddings",
+              skipped: true,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        // Count embeddings before
+        const embeddingsBefore = await prisma.embedding.count({
+          where: { kbId, documentId: document.id },
+        });
+
+        await processDocumentEmbeddings(document.id);
+
+        // Count embeddings after
+        const embeddingsAfter = await prisma.embedding.count({
+          where: { kbId, documentId: document.id },
         });
 
         processedDocuments = 1;
         createdEmbeddings = embeddingsAfter - embeddingsBefore;
       } else {
-        // Process all documents in knowledge base
+        // Process all documents in knowledge base that don't have embeddings
         console.log(`Processing embeddings for entire knowledge base: ${kbId}`);
 
         // Get documents that don't have embeddings yet
@@ -113,69 +211,88 @@ async function handler(req: Request) {
           where: {
             kbId,
             content: { not: null },
+            // Fix: Only get documents that don't have embeddings
+            NOT: {
+              embedding: {
+                some: {},
+              },
+            },
           },
           select: { id: true, filename: true, sourceUrl: true },
         });
 
-        // Count embeddings before
-        const embeddingsBefore = await prisma.embedding.count({
+        if (documentsToProcess.length === 0) {
+          console.log(`No documents need embedding processing for KB ${kbId}`);
+          return new Response(
+            JSON.stringify({
+              success: true,
+              message: "No documents need embedding processing",
+              processedDocuments: 0,
+              createdEmbeddings: 0,
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+
+        // Count total embeddings before processing
+        const totalEmbeddingsBefore = await prisma.embedding.count({
           where: { kbId },
         });
 
         // Process each document
         for (const doc of documentsToProcess) {
           try {
-            // Check if this document already has embeddings
-            const existingEmbeddings = await prisma.embedding.count({
-              where: {
-                kbId,
-              },
-            });
+            console.log(`Processing embeddings for document ${doc.id}`);
 
-            if (existingEmbeddings === 0) {
-              await processDocumentEmbeddings(doc.id);
-              processedDocuments++;
+            await processDocumentEmbeddings(doc.id);
+            processedDocuments++;
 
-              // Small delay to respect API rate limits
-              await new Promise((resolve) => setTimeout(resolve, 100));
-            }
+            // Small delay to respect rate limits
+            await new Promise((r) => setTimeout(r, 100));
           } catch (error) {
-            const errorMsg = `Failed to process document ${doc.id}: ${error instanceof Error ? error.message : "Unknown error"}`;
+            const errorMsg = `Failed to process document ${doc.id}: ${
+              error instanceof Error ? error.message : "Unknown error"
+            }`;
             console.error(errorMsg);
             errors.push(errorMsg);
           }
         }
 
-        // Count embeddings after
-        const embeddingsAfter = await prisma.embedding.count({
+        // Count total embeddings after processing
+        const totalEmbeddingsAfter = await prisma.embedding.count({
           where: { kbId },
         });
 
-        createdEmbeddings = embeddingsAfter - embeddingsBefore;
+        createdEmbeddings = totalEmbeddingsAfter - totalEmbeddingsBefore;
       }
 
       // Update knowledge base metadata to track embedding completion
+      const updatedMetadata = {
+        ...(
+          kb as {
+            id: string;
+            title: string;
+            metadata: KbMetadata;
+          }
+        ).metadata,
+        embeddingsProcessed: processedDocuments > 0,
+        embeddingsProcessedAt: new Date().toISOString(),
+        lastEmbeddingStats: {
+          processedDocuments,
+          createdEmbeddings,
+          totalDocuments: kb._count.documents,
+          totalEmbeddings: kb._count.embeddings + createdEmbeddings,
+          errors: errors.length,
+        },
+      };
+
       await prisma.knowledgeBase.update({
         where: { id: kbId },
         data: {
-          metadata: {
-            ...(
-              kb as {
-                id: string;
-                title: string;
-                metadata: KbMetadata;
-              }
-            ).metadata,
-            embeddingsProcessed: true,
-            embeddingsProcessedAt: new Date().toISOString(),
-            lastEmbeddingStats: {
-              processedDocuments,
-              createdEmbeddings,
-              totalDocuments: kb._count.documents,
-              totalEmbeddings: kb._count.embeddings + createdEmbeddings,
-              errors: errors.length,
-            },
-          },
+          metadata: updatedMetadata,
         },
       });
 
@@ -184,20 +301,38 @@ async function handler(req: Request) {
       console.log(`- Created embeddings: ${createdEmbeddings}`);
       console.log(`- Errors: ${errors.length}`);
 
-      try {
-        await notifyUserProcessingDone(userId, kbId, {
-          title: kb.title,
-          pages: processedDocuments,
-          embeddings: createdEmbeddings,
-          link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
-          language: (kb.metadata as KbMetadata)?.language,
-        });
-        console.log(`User ${userId} notified about KB ${kbId} readiness.`);
-      } catch (notifyErr) {
-        console.error(
-          "Failed to notify user about embeddings completion:",
-          notifyErr,
-        );
+      // Check if this completes all embeddings for the KB
+      const shouldNotify = await shouldSendCompletionNotification(kbId);
+
+      if (shouldNotify) {
+        try {
+          // Get final stats for notification
+          const finalStats = await prisma.knowledgeBase.findUnique({
+            where: { id: kbId },
+            select: {
+              title: true,
+              metadata: true,
+              _count: {
+                select: {
+                  documents: { where: { content: { not: null } } },
+                  embeddings: true,
+                },
+              },
+            },
+          });
+
+          await notifyUserProcessingDone(userId, kbId, {
+            title: finalStats?.title || "Knowledge Base",
+            pages: finalStats?._count.documents || 0,
+            embeddings: finalStats?._count.embeddings || 0,
+            link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
+            language: (finalStats?.metadata as KbMetadata)?.language,
+          });
+
+          console.log(`User ${userId} notified about KB ${kbId} completion.`);
+        } catch (notifyErr) {
+          console.error("Failed to notify user about completion:", notifyErr);
+        }
       }
 
       return new Response(

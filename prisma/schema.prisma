@@ -176,7 +176,7 @@ model Bot {
   updatedAt   DateTime  @updatedAt
   config      Json?
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
 
   knowledgeBaseId String @unique @db.ObjectId
@@ -215,23 +215,27 @@ model Document {
   metadata  Json?
   createdAt DateTime @default(now())
 
-  kb KnowledgeBase @relation(fields: [kbId], references: [id], onDelete: Cascade)
+  kb        KnowledgeBase @relation(fields: [kbId], references: [id], onDelete: Cascade)
+  embedding Embedding[]
 
   @@unique([kbId, sourceUrl])
   @@index([kbId])
 }
 
 model Embedding {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  kbId      String   @db.ObjectId
-  vector    Float[] // embedding array
-  text      String?
-  meta      Json?
-  createdAt DateTime @default(now())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  kbId       String   @db.ObjectId
+  documentId String?  @db.ObjectId
+  vector     Float[]
+  text       String?
+  meta       Json?
+  createdAt  DateTime @default(now())
 
-  kb KnowledgeBase @relation(fields: [kbId], references: [id], onDelete: Cascade)
+  kb       KnowledgeBase @relation(fields: [kbId], references: [id], onDelete: Cascade)
+  document Document?     @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@index([kbId])
+  @@index([kbId, documentId])
 }
 
 model Lead {

@@ -9,15 +9,15 @@ const openai = new OpenAI({
 
 // Configuration
 const EMBEDDING_CONFIG = {
-  model: "text-embedding-3-small", // More cost-effective, good quality
-  maxTokensPerChunk: 8000, // Conservative limit to avoid API errors
-  chunkOverlap: 200, // Overlap between chunks to maintain context
-  minChunkSize: 100, // Minimum chunk size to avoid very small embeddings
+  model: "text-embedding-3-small",
+  maxTokensPerChunk: 8000,
+  chunkOverlap: 200,
+  minChunkSize: 100,
 } as const;
 
-const PRISMA_BATCH_SIZE = 500; // tune as needed, Mongo and Prisma limitations considered
-const UPSTASH_BATCH_SIZE = 500; // Upstash recommend reasonably sized batches
-const EXPECTED_DIMENSION = 1536; // <-- VERIFY this matches your embedding model dimension
+const PRISMA_BATCH_SIZE = 500;
+const UPSTASH_BATCH_SIZE = 500;
+const EXPECTED_DIMENSION = 1536;
 
 export interface ChunkMetadata {
   documentId: string;
@@ -38,12 +38,11 @@ function chunkText(
 ): string[] {
   if (!text || text.trim().length === 0) return [];
 
-  // Rough token estimation: ~4 characters per token
   const estimatedTokensPerChar = 0.25;
   const maxCharsPerChunk = Math.floor(maxTokens / estimatedTokensPerChar);
 
   const chunks: string[] = [];
-  const paragraphs = text.split(/\n\s*\n/); // Split by double newlines (paragraphs)
+  const paragraphs = text.split(/\n\s*\n/);
 
   let currentChunk = "";
 
@@ -51,13 +50,11 @@ function chunkText(
     const trimmedParagraph = paragraph.trim();
     if (!trimmedParagraph) continue;
 
-    // If adding this paragraph would exceed limit, save current chunk and start new one
     if (currentChunk.length + trimmedParagraph.length > maxCharsPerChunk) {
       if (currentChunk.trim().length > EMBEDDING_CONFIG.minChunkSize) {
         chunks.push(currentChunk.trim());
       }
 
-      // Start new chunk with overlap from previous chunk
       const words = currentChunk.trim().split(/\s+/);
       const overlapWords = Math.min(
         words.length,
@@ -75,7 +72,6 @@ function chunkText(
     }
   }
 
-  // Add final chunk
   if (currentChunk.trim().length > EMBEDDING_CONFIG.minChunkSize) {
     chunks.push(currentChunk.trim());
   }
@@ -115,6 +111,7 @@ export async function createEmbeddings(texts: string[]): Promise<number[][]> {
 async function batchCreateEmbeddingsToPrisma(
   embeddingData: {
     kbId: string;
+    documentId: string;
     vector: number[];
     text: string;
     meta: ChunkMetadata;
@@ -125,6 +122,7 @@ async function batchCreateEmbeddingsToPrisma(
 
     const prismaData = slice.map((item) => ({
       kbId: item.kbId,
+      documentId: item.documentId, // Fix: Always include documentId
       vector: item.vector,
       text: item.text,
       meta: item.meta as unknown as Prisma.JsonValue,
@@ -138,6 +136,7 @@ async function batchCreateEmbeddingsToPrisma(
 
 async function saveEmbeddings(
   kbId: string,
+  documentId: string, // Fix: Make documentId required
   chunks: string[],
   embeddings: number[][],
   metadata: Omit<
@@ -169,6 +168,7 @@ async function saveEmbeddings(
 
     return {
       kbId,
+      documentId, // Fix: Always include documentId
       vector: embeddings[index],
       text: chunk,
       meta: chunkMetadata,
@@ -179,7 +179,7 @@ async function saveEmbeddings(
   try {
     await batchCreateEmbeddingsToPrisma(embeddingData);
     console.log(
-      `Saved ${embeddingData.length} embeddings to Prisma for doc ${metadata.documentId}`,
+      `Saved ${embeddingData.length} embeddings to Prisma for doc ${documentId}`,
     );
   } catch (err) {
     console.error("Failed to save embeddings to database:", err);
@@ -190,29 +190,27 @@ async function saveEmbeddings(
   try {
     const upstashVectors: Vector[] = embeddingData
       .map((e, index) => {
-        // Validate vector dimension before creating
         if (
           !Array.isArray(e.vector) ||
           (EXPECTED_DIMENSION && e.vector.length !== EXPECTED_DIMENSION)
         ) {
           console.warn(
-            `Vector dimension mismatch for ${metadata.documentId}::${index}: expected ${EXPECTED_DIMENSION}, got ${Array.isArray(e.vector) ? e.vector.length : typeof e.vector}`,
+            `Vector dimension mismatch for ${documentId}::${index}: expected ${EXPECTED_DIMENSION}, got ${Array.isArray(e.vector) ? e.vector.length : typeof e.vector}`,
           );
-          return null; // Will be filtered out
+          return null;
         }
 
-        return createVector(`${metadata.documentId}::${index}`, e.vector, {
-          documentId: metadata.documentId,
+        return createVector(`${documentId}::${index}`, e.vector, {
+          documentId: documentId,
           chunkIndex: index,
           filename: metadata.filename,
           sourceUrl: metadata.sourceUrl,
           kbId,
-          text: chunks[index], // Include text in metadata for easy retrieval
+          text: chunks[index],
         });
       })
-      .filter((vector): vector is Vector => vector !== null); // Filter out null vectors
+      .filter((vector): vector is Vector => vector !== null);
 
-    // Batch upsert to Upstash Vector
     if (upstashVectors.length > 0) {
       for (let i = 0; i < upstashVectors.length; i += UPSTASH_BATCH_SIZE) {
         const batch = upstashVectors.slice(i, i + UPSTASH_BATCH_SIZE);
@@ -220,19 +218,19 @@ async function saveEmbeddings(
       }
 
       console.log(
-        `Upserted ${upstashVectors.length} vectors to Upstash Vector for doc ${metadata.documentId}`,
+        `Upserted ${upstashVectors.length} vectors to Upstash Vector for doc ${documentId}`,
       );
     } else {
       console.warn("No valid vectors to upsert to Upstash Vector");
     }
   } catch (err) {
     console.error("Failed to upsert vectors to Upstash Vector:", err);
-    // don't throw — DB is the source of truth; consider scheduling reindex
   }
 }
 
 /**
  * Process a single document for embeddings
+ * Fix: Proper document-specific embedding check
  */
 export async function processDocumentEmbeddings(
   documentId: string,
@@ -259,15 +257,16 @@ export async function processDocumentEmbeddings(
       `Processing embeddings for document: ${document.filename || document.sourceUrl || documentId}`,
     );
 
-    // Check if embeddings already exist for this document
-    const existingEmbeddings = await prisma.embedding.findMany({
+    // Fix: Check if embeddings exist for THIS specific document
+    const existingEmbeddings = await prisma.embedding.findFirst({
       where: {
         kbId: document.kbId,
+        documentId: documentId, // Fix: Check for this specific document
       },
       select: { id: true },
     });
 
-    if (existingEmbeddings.length > 0) {
+    if (existingEmbeddings) {
       console.log(
         `Embeddings already exist for document ${documentId}, skipping...`,
       );
@@ -287,8 +286,8 @@ export async function processDocumentEmbeddings(
     // Create embeddings
     const embeddings = await createEmbeddings(chunks);
 
-    // Save to database
-    await saveEmbeddings(document.kbId, chunks, embeddings, {
+    // Save to database - Fix: Pass documentId explicitly
+    await saveEmbeddings(document.kbId, document.id, chunks, embeddings, {
       documentId: document.id,
       sourceUrl: document.sourceUrl ?? "",
       filename: document.filename ?? "",
@@ -306,6 +305,7 @@ export async function processDocumentEmbeddings(
 
 /**
  * Process embeddings for all documents in a knowledge base
+ * Fix: Proper document filtering
  */
 export async function processKnowledgeBaseEmbeddings(
   kbId: string,
@@ -313,11 +313,17 @@ export async function processKnowledgeBaseEmbeddings(
   try {
     console.log(`Starting embedding processing for knowledge base ${kbId}`);
 
-    // Get all documents in the knowledge base that don't have embeddings
-    const documents = await prisma.document.findMany({
+    // Fix: Get documents that don't have embeddings yet
+    const documentsWithoutEmbeddings = await prisma.document.findMany({
       where: {
         kbId,
         content: { not: null },
+        // Fix: Use a subquery to exclude documents that already have embeddings
+        NOT: {
+          embedding: {
+            some: {},
+          },
+        },
       },
       select: {
         id: true,
@@ -327,17 +333,19 @@ export async function processKnowledgeBaseEmbeddings(
       },
     });
 
-    if (documents.length === 0) {
-      console.log(`No documents found for knowledge base ${kbId}`);
+    if (documentsWithoutEmbeddings.length === 0) {
+      console.log(
+        `No documents need embedding processing for knowledge base ${kbId}`,
+      );
       return;
     }
 
     console.log(
-      `Found ${documents.length} documents to process for embeddings`,
+      `Found ${documentsWithoutEmbeddings.length} documents to process for embeddings`,
     );
 
     // Process documents sequentially to avoid rate limits
-    for (const document of documents) {
+    for (const document of documentsWithoutEmbeddings) {
       try {
         await processDocumentEmbeddings(document.id);
 

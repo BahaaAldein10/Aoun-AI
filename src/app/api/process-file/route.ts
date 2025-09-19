@@ -404,7 +404,7 @@ async function handler(req: Request) {
         await qstash.publishJSON({
           url: `${process.env.BASE_URL ?? process.env.BASE_URL}/api/process-embeddings`,
           body: { kbId, documentId: savedDocument.id, userId },
-          delay: 5,
+          delay: 10,
         });
         console.log(
           `Queued embedding processing for document ${savedDocument.id}`,

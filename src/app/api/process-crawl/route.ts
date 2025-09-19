@@ -328,7 +328,7 @@ async function enqueueChild(
     await qstash.publishJSON({
       url: `${process.env.BASE_URL}/api/process-crawl`,
       body: { kbId, webUrl: url, userId, depth },
-      delay: Math.floor(Math.random() * 5) + 1, // Random delay 1-5 seconds to spread load
+      delay: 10,
     });
   } catch (error) {
     console.error("Failed to enqueue child URL", url, ":", error);
@@ -521,7 +521,7 @@ async function handler(req: Request) {
             documentId: savedDocument.id,
             userId,
           },
-          delay: 5, // small delay to let DB transactions settle
+          delay: 10,
         });
         console.log(
           `Queued embedding processing for document ${savedDocument.id}`,

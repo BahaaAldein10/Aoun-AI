@@ -214,7 +214,7 @@ export async function POST(req: Request) {
                 userId,
                 depth: maxDepth,
               },
-              delay: Math.floor(index / 10) * 2, // 2 second delay for every 10 URLs
+              delay: Math.floor(index / 10) * 2 + 15,
             });
             enqueuedUrls++;
 
@@ -230,7 +230,7 @@ export async function POST(req: Request) {
                   userId,
                 },
                 // add an extra delay so processing-crawl likely finishes first
-                delay: Math.floor(index / 10) * 2 + 8,
+                delay: Math.floor(index / 10) * 2 + 15,
               });
             } catch (embedErr) {
               console.error(

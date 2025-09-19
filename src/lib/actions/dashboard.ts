@@ -7,6 +7,7 @@ import { auth } from "../auth";
 import { SupportedLang } from "../dictionaries";
 import { prisma } from "../prisma";
 import { settingsSchema } from "../schemas/dashboard";
+import { canCreateMoreAgents } from "./agent";
 
 interface UpdateSettingsNameParams {
   userId: string;
@@ -109,6 +110,9 @@ export async function createKb(params: CreateKbParams) {
   const session = await auth();
   const userId = session?.user?.id;
   if (!userId) throw new Error("Not authenticated");
+
+  const canCreateMore = await canCreateMoreAgents();
+  if (!canCreateMore) throw new Error("Limit reached");
 
   try {
     const kb = await prisma.knowledgeBase.create({
