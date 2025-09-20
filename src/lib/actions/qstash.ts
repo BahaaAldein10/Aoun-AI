@@ -9,25 +9,37 @@ const qstashClient = new Client({
   token: process.env.QSTASH_TOKEN!,
 });
 
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
 export async function qstash(kb: KnowledgeBase) {
   const metadata = kb.metadata as KbMetadata;
+
+  const results = {
+    success: false,
+    urlProcessing: false,
+    filesProcessing: 0,
+    faqProcessing: 0,
+  };
 
   try {
     // Handle URL crawling
     if (metadata?.url) {
       console.log(`Starting crawl for KB ${kb.id} with URL: ${metadata.url}`);
 
-      // Use the correct start-crawl endpoint instead of process-crawl
       await qstashClient.publishJSON({
         url: `${process.env.BASE_URL}/api/start-crawl`,
         body: {
           kbId: kb.id,
           userId: kb.userId,
           url: metadata.url,
-          maxDepth: 2, // Add explicit depth control
+          maxDepth: 2,
         },
       });
 
+      results.urlProcessing = true;
       console.log(`Successfully enqueued crawl job for ${metadata.url}`);
     }
 
@@ -35,7 +47,6 @@ export async function qstash(kb: KnowledgeBase) {
     if (metadata?.files && metadata.files.length > 0) {
       console.log(`Processing ${metadata.files.length} files for KB ${kb.id}`);
 
-      // Process each file
       for (const fileUrl of metadata.files) {
         if (!fileUrl) continue;
 
@@ -58,7 +69,7 @@ export async function qstash(kb: KnowledgeBase) {
           }
 
           await qstashClient.publishJSON({
-            url: `${process.env.BASE_URL}/api/process-file`, // Fixed: use BASE_URL
+            url: `${process.env.BASE_URL}/api/process-file`,
             body: {
               kbId: kb.id,
               userId: kb.userId,
@@ -67,10 +78,10 @@ export async function qstash(kb: KnowledgeBase) {
               fileType: file.fileType,
               fileSize: file.size,
             },
-            // Add delay for file processing to avoid overwhelming the system
             delay: 2,
           });
 
+          results.filesProcessing++;
           console.log(`Enqueued file processing for: ${file.filename}`);
         } catch (fileError) {
           console.error(`Failed to process file ${fileUrl}:`, fileError);
@@ -79,12 +90,48 @@ export async function qstash(kb: KnowledgeBase) {
       }
     }
 
-    // Return success with details
-    return {
-      success: true,
-      urlProcessing: !!metadata?.url,
-      filesProcessing: metadata?.files?.length || 0,
-    };
+    // Handle FAQ processing
+    if (
+      metadata?.faq &&
+      Array.isArray(metadata.faq) &&
+      metadata.faq.length > 0
+    ) {
+      // Filter out empty FAQ items
+      const validFaqs = metadata.faq.filter(
+        (faq: FaqItem) =>
+          faq.question &&
+          faq.question.trim() &&
+          faq.answer &&
+          faq.answer.trim(),
+      );
+
+      if (validFaqs.length > 0) {
+        console.log(`Processing ${validFaqs.length} FAQ items for KB ${kb.id}`);
+
+        try {
+          await qstashClient.publishJSON({
+            url: `${process.env.BASE_URL}/api/process-faq`,
+            body: {
+              kbId: kb.id,
+              userId: kb.userId,
+              faqItems: validFaqs,
+            },
+            delay: 5, // Process FAQ after initial setup
+          });
+
+          results.faqProcessing = validFaqs.length;
+          console.log(`Enqueued FAQ processing: ${validFaqs.length} items`);
+        } catch (faqError) {
+          console.error(`Failed to enqueue FAQ processing:`, faqError);
+          // Continue with processing - don't fail entire operation
+        }
+      }
+    }
+
+    results.success = true;
+    console.log(`QStash processing summary for KB ${kb.id}:`, results);
+
+    return results;
   } catch (error) {
     console.error(`Failed to start processing for KB ${kb.id}:`, error);
 

@@ -328,8 +328,15 @@ const SetupClient = ({
   };
 
   async function onSubmit(values: SetupFormValues) {
-    if (!values.url && (!values.files || values.files.length === 0)) {
-      toast.error(t.provide_url_or_files);
+    if (
+      !values.url &&
+      (!values.files || values.files.length === 0) &&
+      (!values.faq ||
+        values.faq.every(
+          (item) => !item.question.trim() || !item.answer.trim(),
+        ))
+    ) {
+      toast.error(t.provide_url_or_files_or_faq);
       return;
     }
 
@@ -385,8 +392,12 @@ const SetupClient = ({
         metadata.files,
         (initialKb?.metadata as KbMetadata)?.files,
       );
+      const unchangedFaq = isEqual(
+        metadata.faq,
+        (initialKb?.metadata as KbMetadata)?.faq,
+      );
 
-      if (unchangedUrl && unchangedFiles) {
+      if (unchangedUrl && unchangedFiles && unchangedFaq) {
         if (res?.kb) {
           const kbMeta = (res.kb.metadata as KbMetadata) || ({} as KbMetadata);
 
@@ -410,31 +421,40 @@ const SetupClient = ({
         return res;
       }
 
-      // Start processing jobs (crawling/file processing)
+      // Start processing jobs (crawling/file processing/FAQ processing)
       if (res) {
         try {
           const processingResult = await qstash(res.kb);
 
-          // Show more specific success messages
-          if (
-            processingResult.urlProcessing &&
-            processingResult.filesProcessing > 0
-          ) {
-            toast.success(
-              t.processing_url_and_files.replace(
+          // Show more specific success messages based on what's being processed
+          const processingSources = [];
+          if (processingResult.urlProcessing) {
+            processingSources.push(t.processing_url_source || "website");
+          }
+          if (processingResult.filesProcessing > 0) {
+            processingSources.push(
+              t.processing_files_source?.replace(
                 "{{count}}",
                 processingResult.filesProcessing.toString(),
-              ),
-              { duration: 6000 },
+              ) || `${processingResult.filesProcessing} files`,
             );
-          } else if (processingResult.urlProcessing) {
-            toast.success(t.processing_url);
-          } else if (processingResult.filesProcessing > 0) {
-            toast.success(
-              t.processing_files.replace(
+          }
+          if (processingResult.faqProcessing > 0) {
+            processingSources.push(
+              t.processing_faq_source?.replace(
                 "{{count}}",
-                processingResult.filesProcessing.toString(),
-              ),
+                processingResult.faqProcessing.toString(),
+              ) || `${processingResult.faqProcessing} FAQ items`,
+            );
+          }
+
+          if (processingSources.length > 0) {
+            const sourcesText = processingSources.join(", ");
+            toast.success(
+              t.processing_multiple_sources?.replace(
+                "{{sources}}",
+                sourcesText,
+              ) || `Processing: ${sourcesText}`,
               { duration: 6000 },
             );
           }
@@ -447,7 +467,7 @@ const SetupClient = ({
         }
       }
 
-      // --- make form pristine with saved values ---
+      // Make form pristine with saved values
       if (res?.kb) {
         const kbMeta = (res.kb.metadata as KbMetadata) || ({} as KbMetadata);
 
