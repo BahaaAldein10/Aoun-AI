@@ -588,7 +588,14 @@
     "add_content": "Add Content",
     "no_knowledge_bases": "No Knowledge Bases",
     "no_knowledge_bases_desc": "You need to create knowledge bases before you can deploy them. Create your first knowledge base to get started.",
-    "create_knowledge_base": "Create Knowledge Base"
+    "create_knowledge_base": "Create Knowledge Base",
+
+    "loadingIntegrations": "Loading integrations...",
+    "no_integrations": "No integrations connected",
+    "apply_to_all_integrations": "Link to all connected integrations",
+    "connected_integrations": "Connected Integrations",
+    "generated_tokens": "Generated tokens",
+    "verify_after_generate": "Paste each token into the corresponding Meta webhook Verify Token field."
   },
   "dashboard_integrations": {
     "title": "Connected Apps",

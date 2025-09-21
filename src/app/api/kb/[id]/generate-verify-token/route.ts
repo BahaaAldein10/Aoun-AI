@@ -9,6 +9,11 @@ function sha256Hex(input: string) {
   return crypto.createHash("sha256").update(input, "utf8").digest("hex");
 }
 
+type GenerateBody = {
+  integrationId?: string;
+  integrationIds?: string[]; // allow multiple
+};
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -28,21 +33,88 @@ export async function POST(
     if (kb.userId !== user.user.id)
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-    // Generate secure random token (e.g., 20 bytes = 40 hex chars)
-    const token = crypto.randomBytes(20).toString("hex");
-    const hashed = sha256Hex(token);
+    // SAFE body parsing: handle empty body or invalid JSON gracefully
+    let body: GenerateBody = {};
+    try {
+      const text = await req.text();
+      if (text && text.trim().length > 0) {
+        body = JSON.parse(text) as GenerateBody;
+      } else {
+        body = {};
+      }
+    } catch (parseErr) {
+      // If there's invalid JSON, treat as empty body (legacy flow).
+      console.warn(
+        "generate-verify-token: failed to parse JSON body, falling back to empty body",
+        parseErr,
+      );
+      body = {};
+    }
 
-    const metadata = (kb.metadata as Record<string, unknown>) ?? {};
-    metadata.verifyTokenHash = hashed;
-    metadata.verifyTokenCreatedAt = new Date().toISOString();
+    const integrationIds =
+      body.integrationIds ?? (body.integrationId ? [body.integrationId] : []);
 
-    await prisma.knowledgeBase.update({
-      where: { id: kbId },
-      data: { metadata: metadata as unknown as Prisma.InputJsonValue },
-    });
+    // If no integrationIds provided => generate legacy token (kbId::random)
+    if (integrationIds.length === 0) {
+      const random = crypto.randomBytes(20).toString("hex");
+      const plaintext = `${kbId}::${random}`; // legacy kbId::token format
+      const hashed = sha256Hex(random); // backwards compat: previously stored sha256(token)
+      // Also store v2 full plaintext hash for future-proofing
+      const metadata = (kb.metadata as Record<string, unknown>) ?? {};
+      metadata.verifyTokenHash = hashed;
+      metadata.verifyTokenHashV2 = sha256Hex(plaintext);
+      metadata.verifyTokenCreatedAt = new Date().toISOString();
 
-    // Return the plaintext token once — instruct user to copy it into Meta Dev Portal as Verify Token.
-    return NextResponse.json({ success: true, verifyToken: token });
+      await prisma.knowledgeBase.update({
+        where: { id: kbId },
+        data: { metadata: metadata as unknown as Prisma.InputJsonValue },
+      });
+
+      return NextResponse.json({
+        success: true,
+        tokens: [{ integrationId: null, token: plaintext }],
+      });
+    }
+
+    // Generate one token per integration
+    const tokens: { integrationId: string; token: string }[] = [];
+
+    for (const integrationId of integrationIds) {
+      // verify that the integration belongs to this user
+      const integ = await prisma.integration.findUnique({
+        where: { id: integrationId },
+        select: { id: true, userId: true },
+      });
+      if (!integ || integ.userId !== user.user.id) {
+        // skip invalid integration ids (don't fail whole batch)
+        console.warn(
+          "generate-verify-token: skipping invalid integrationId",
+          integrationId,
+        );
+        continue;
+      }
+
+      const random = crypto.randomBytes(20).toString("hex");
+      const plaintext = `${integrationId}::${kbId}::${random}`;
+      const hashed = sha256Hex(plaintext); // store full plaintext hash (new format)
+
+      // Store hashed in KB metadata (merge with existing map if present)
+      const metadata = (kb.metadata as Record<string, unknown>) ?? {};
+      const tokenMap =
+        (metadata.verifyTokenMap as Record<string, string>) ?? {};
+      tokenMap[integrationId] = hashed;
+      metadata.verifyTokenMap = tokenMap;
+      metadata.verifyTokenCreatedAt = new Date().toISOString();
+
+      await prisma.knowledgeBase.update({
+        where: { id: kbId },
+        data: { metadata: metadata as unknown as Prisma.InputJsonValue },
+      });
+
+      tokens.push({ integrationId, token: plaintext });
+    }
+
+    return NextResponse.json({ success: true, tokens });
   } catch (err) {
     console.error("generate-verify-token error:", err);
     return NextResponse.json({ error: "internal_error" }, { status: 500 });

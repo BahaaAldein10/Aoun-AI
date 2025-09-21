@@ -1,3 +1,4 @@
+// app/api/integrations/callback/[provider]/route.ts
 import { auth } from "@/lib/auth";
 import { encrypt } from "@/lib/crypto";
 import { SupportedLang } from "@/lib/dictionaries";
@@ -36,6 +37,9 @@ type Credentials = {
   channel?: string;
   scope?: string | null;
   phone_number_id?: string | null;
+  page_id?: string | null;
+  page_access_token?: string | null;
+  instagram_business_account_id?: string | null;
   instance_url?: string;
   hub_id?: string | null;
   hub_domain?: string | null;
@@ -66,6 +70,7 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     clientSecret: process.env.HUBSPOT_CLIENT_SECRET!,
     redirectUri: `${process.env.NEXTAUTH_URL}/api/integrations/callback/hubspot`,
   },
+  // facebook is handled separately
 };
 
 const validateCSRF = async (
@@ -255,7 +260,6 @@ const getWhatsAppPhoneNumber = async (
     const graphUrl = `https://graph.facebook.com/${graphVersion}/me?fields=businesses{owned_whatsapp_business_accounts{phone_numbers{display_phone_number,id}}}&access_token=${encodeURIComponent(accessToken)}`;
 
     const phoneInfo = await fetch(graphUrl).then((r) => r.json());
-
     const phoneNumber =
       phoneInfo?.businesses?.data?.[0]?.owned_whatsapp_business_accounts
         ?.data?.[0]?.phone_numbers?.data?.[0];
@@ -267,6 +271,44 @@ const getWhatsAppPhoneNumber = async (
       error,
     );
     return null;
+  }
+};
+
+const getPagesAndInstagram = async (accessToken: string) => {
+  try {
+    const graphVersion = process.env.GRAPH_VERSION ?? "v16.0";
+    // Get pages the user manages (contains page id and page access tokens)
+    const pagesUrl = `https://graph.facebook.com/${graphVersion}/me/accounts?access_token=${encodeURIComponent(accessToken)}`;
+    const pagesRes = await fetch(pagesUrl).then((r) => r.json());
+    const firstPage = pagesRes?.data?.[0] ?? null;
+
+    if (!firstPage)
+      return {
+        pageId: null,
+        pageAccessToken: null,
+        instagramBusinessAccountId: null,
+      };
+
+    const pageId = firstPage.id ?? null;
+    const pageAccessToken = firstPage.access_token ?? null;
+
+    // Get instagram_business_account for the page
+    let instagramBusinessAccountId: string | null = null;
+    if (pageId) {
+      const pageInfoUrl = `https://graph.facebook.com/${graphVersion}/${pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(accessToken)}`;
+      const pageInfo = await fetch(pageInfoUrl).then((r) => r.json());
+      instagramBusinessAccountId =
+        pageInfo?.instagram_business_account?.id ?? null;
+    }
+
+    return { pageId, pageAccessToken, instagramBusinessAccountId };
+  } catch (error) {
+    console.warn("Could not fetch pages/instagram info:", error);
+    return {
+      pageId: null,
+      pageAccessToken: null,
+      instagramBusinessAccountId: null,
+    };
   }
 };
 
@@ -302,9 +344,14 @@ export async function GET(
     if (provider === "facebook") {
       tokenRes = await handleFacebookTokenExchange(code);
       const phoneNumberId = await getWhatsAppPhoneNumber(tokenRes.access_token);
+      const pagesInfo = await getPagesAndInstagram(tokenRes.access_token);
+
       additionalCredentials = {
         channel,
         phone_number_id: phoneNumberId,
+        page_id: pagesInfo.pageId,
+        page_access_token: pagesInfo.pageAccessToken,
+        instagram_business_account_id: pagesInfo.instagramBusinessAccountId,
         scope: tokenRes.scope ?? null,
       };
     } else {
@@ -326,9 +373,8 @@ export async function GET(
       stateObj?.type,
       stateObj?.channel,
     );
-
-
     const providerToStore = provider === "facebook" ? channel : provider;
+
     await upsertIntegration(session.user.id, providerToStore, integrationType, {
       ...tokenRes,
       ...additionalCredentials,

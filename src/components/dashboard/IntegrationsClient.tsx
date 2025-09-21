@@ -169,6 +169,13 @@ const MessagingCard = ({ provider, t, connectedApp }: MessagingCardProps) => {
         </CardDescription>
       </CardHeader>
 
+      <CardContent>
+        <p className="text-muted-foreground text-sm">
+          {t.messaging_card_setup ||
+            "Set up this integration to start receiving and sending messages"}
+        </p>
+      </CardContent>
+
       <CardFooter className={isRTL ? "flex-row-reverse justify-end" : ""}>
         {!isConnected ? (
           <Button

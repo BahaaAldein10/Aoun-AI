@@ -590,7 +590,14 @@
     "add_content": "إضافة محتوى",
     "no_knowledge_bases": "لا توجد قواعد معرفة",
     "no_knowledge_bases_desc": "يجب إنشاء قواعد معرفة قبل أن تتمكن من نشرها. أنشئ قاعدة المعرفة الأولى للبدء.",
-    "create_knowledge_base": "إنشاء قاعدة معرفة"
+    "create_knowledge_base": "إنشاء قاعدة معرفة",
+
+    "loadingIntegrations": "جاري تحميل عمليات التكامل...",
+    "no_integrations": "لا توجد عمليات تكامل متصلة",
+    "apply_to_all_integrations": "ربط بجميع عمليات التكامل المتصلة",
+    "connected_integrations": "عمليات التكامل المتصلة",
+    "generated_tokens": "الرموز التي تم إنشاؤها",
+    "verify_after_generate": "ألصق كل رمز في حقل 'Verify Token' المقابل في بوابة مطوري Meta."
   },
   "dashboard_integrations": {
     "title": "التطبيقات المتصلة",
