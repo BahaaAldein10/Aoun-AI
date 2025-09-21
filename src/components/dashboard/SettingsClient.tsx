@@ -120,7 +120,7 @@ const SettingsClient = ({ user, dict, lang }: SettingsClientProps) => {
 
       const uploadedFile = await res.json();
 
-      await updateAvatar(user.id, uploadedFile.url);
+      await updateAvatar(user.id, uploadedFile.url, lang);
 
       toast.success("Avatar uploaded successfully!");
     } catch (err) {

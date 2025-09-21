@@ -114,12 +114,25 @@ export async function deleteUser({
   }
 }
 
-export async function updateAvatar(id: string, avatar: string) {
+export async function updateAvatar(
+  id: string,
+  avatar: string,
+  lang: SupportedLang,
+) {
   try {
     const session = await auth();
     if (!session?.user?.id) throw new Error("Not authenticated");
 
+    const role = session.user.role ?? "USER";
+
+    const route = {
+      ADMIN: `/${lang}/admin/settings`,
+      USER: `/${lang}/dashboard/settings`,
+    };
+
     await prisma.user.update({ where: { id }, data: { image: avatar } });
+
+    revalidatePath(route[role]);
   } catch (error) {
     console.log(error);
     throw error;
