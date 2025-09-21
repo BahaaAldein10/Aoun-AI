@@ -4,36 +4,22 @@ import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { processDocumentEmbeddings } from "@/lib/embedding-service";
 import { notifyUserProcessingDone } from "@/lib/notifier";
 import { prisma } from "@/lib/prisma";
+import { Client as QStashClient } from "@upstash/qstash";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
+
+const qstash = new QStashClient({ token: process.env.QSTASH_TOKEN! });
 
 async function shouldSendCompletionNotification(
   kbId: string,
 ): Promise<boolean> {
-  // Check if all documents in the KB have embeddings
-  const stats = await prisma.knowledgeBase.findUnique({
-    where: { id: kbId },
-    select: {
-      _count: {
-        select: {
-          documents: {
-            where: { content: { not: null } },
-          },
-        },
-      },
-    },
+  const totalDocuments = await prisma.document.count({
+    where: { kbId, content: { not: null } },
   });
 
   const documentsWithEmbeddings = await prisma.document.count({
-    where: {
-      kbId,
-      content: { not: null },
-      embedding: { some: {} },
-    },
+    where: { kbId, content: { not: null }, embedding: { some: {} } },
   });
 
-  const totalDocuments = stats?._count.documents || 0;
-
-  // Send notification if all documents now have embeddings
   return totalDocuments > 0 && documentsWithEmbeddings === totalDocuments;
 }
 
@@ -41,6 +27,7 @@ async function handler(req: Request) {
   try {
     const payload = await req.json();
     const { kbId, documentId, userId, webUrl } = payload;
+    const attempts = (payload.attempts ?? 0) as number;
 
     if (!kbId || !userId) {
       return new Response(
@@ -55,7 +42,7 @@ async function handler(req: Request) {
     }
 
     console.log(
-      `Processing embeddings for KB ${kbId}, document: ${documentId || "all"}`,
+      `Processing embeddings for KB ${kbId}, document: ${documentId || "all"}, webUrl: ${webUrl || "none"}, attempts: ${attempts}`,
     );
 
     // Verify the knowledge base belongs to the user
@@ -141,27 +128,20 @@ async function handler(req: Request) {
 
         // Find document by sourceUrl
         const document = await prisma.document.findFirst({
-          where: {
-            kbId,
-            sourceUrl: webUrl,
-          },
+          where: { kbId, sourceUrl: webUrl },
           select: { id: true, filename: true, sourceUrl: true },
         });
 
         if (!document) {
           console.warn(
-            `Document with URL ${webUrl} not found yet, skipping...`,
+            `Document ${webUrl} not found yet — returning 500 so QStash will retry.`,
           );
           return new Response(
             JSON.stringify({
-              success: true,
-              message: "Document not found yet, will retry later",
-              skipped: true,
+              success: false,
+              message: "document_not_found_yet",
             }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
+            { status: 500, headers: { "Content-Type": "application/json" } },
           );
         }
 
@@ -211,7 +191,7 @@ async function handler(req: Request) {
           where: {
             kbId,
             content: { not: null },
-            // Fix: Only get documents that don't have embeddings
+            // Only get documents that don't have embeddings
             NOT: {
               embedding: {
                 some: {},
