@@ -191,11 +191,17 @@ const DeployClient = ({
         body = {};
       }
 
-      const res = await fetch(`/api/kb/${kbId}/generate-verify-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: Object.keys(body).length ? JSON.stringify(body) : undefined,
-      });
+      const payload = Object.keys(body).length
+        ? JSON.stringify(body)
+        : undefined;
+      const options: RequestInit = { method: "POST" };
+      
+      if (payload) {
+        options.headers = { "Content-Type": "application/json" };
+        options.body = payload;
+      }
+
+      const res = await fetch(`/api/kb/${kbId}/generate-verify-token`, options);
 
       const json = await res.json();
 
@@ -456,14 +462,12 @@ const DeployClient = ({
                           </div>
 
                           <div className="mt-2 space-y-2">
-                            {
-                              integrations &&
-                              integrations.length === 0 && (
-                                <div className="text-muted-foreground text-sm">
-                                  {t.no_integrations ??
-                                    "No integrations connected"}
-                                </div>
-                              )}
+                            {integrations && integrations.length === 0 && (
+                              <div className="text-muted-foreground text-sm">
+                                {t.no_integrations ??
+                                  "No integrations connected"}
+                              </div>
+                            )}
 
                             {integrations && integrations.length > 0 && (
                               <div className="grid gap-2">
