@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dictionary } from "@/contexts/dictionary-context";
-import { createKb, saveFileToDB, updateKb } from "@/lib/actions/dashboard";
+import { createKb, updateKb } from "@/lib/actions/dashboard";
 import { qstash } from "@/lib/actions/qstash";
 import { SupportedLang } from "@/lib/dictionaries";
 import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
@@ -262,6 +262,7 @@ const SetupClient = ({
         const fd = new FormData();
         fd.append("file", file);
         fd.append("userId", userId);
+        fd.append("kbId", initialKb?.id ?? "");
 
         const res = await fetch("/api/upload", {
           method: "POST",
@@ -276,7 +277,7 @@ const SetupClient = ({
         }
 
         const data = await res.json();
-        const signedUrl = data?.url ?? data?.signedUrl ?? null;
+        const signedUrl = data?.url ?? null;
 
         if (!signedUrl) {
           console.error("No URL returned from /api/upload", data);
@@ -289,16 +290,6 @@ const SetupClient = ({
         const current = getValues("files") || [];
         const next = [...current, signedUrl];
         setValue("files", next);
-
-        const saveResult = await saveFileToDB({
-          fileUrl: signedUrl,
-          fileName: file.name,
-          fileType: file.type,
-          fileSize: file.size,
-        });
-        if (!saveResult?.success) {
-          console.warn("saveFileToDB failed", saveResult);
-        }
 
         uploadedUrls.push(signedUrl);
 

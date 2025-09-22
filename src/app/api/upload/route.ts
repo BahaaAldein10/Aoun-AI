@@ -36,6 +36,7 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const userId = formData.get("userId") as string | null; // 👈 receive userId from client
+    const kbId = formData.get("kbId") as string | null; // 👈 receive kbId from client
 
     if (!file || !userId) {
       return NextResponse.json(
@@ -82,6 +83,7 @@ export async function POST(req: Request) {
     const uploadedFile = await prisma.uploadedFile.create({
       data: {
         userId,
+        kbId,
         filename: fileName,
         fileType: file.type,
         size: file.size,

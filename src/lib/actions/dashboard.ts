@@ -1,9 +1,11 @@
 "use server";
 
 import { Dictionary } from "@/contexts/dictionary-context";
+import console from "console";
 import { revalidatePath } from "next/cache";
 import z from "zod";
 import { auth } from "../auth";
+import { deleteFilesFromFirebase } from "../deleteFilesFromFirebase";
 import { SupportedLang } from "../dictionaries";
 import { prisma } from "../prisma";
 import { settingsSchema } from "../schemas/dashboard";
@@ -38,42 +40,6 @@ export async function updateSettingsName(params: UpdateSettingsNameParams) {
     };
   } catch (error) {
     console.error("[UPDATE_USERNAME_ERROR]", error);
-    return { success: false };
-  }
-}
-
-type SaveFileParams = {
-  fileUrl: string;
-  fileName: string;
-  fileType?: string | null;
-  fileSize?: number;
-};
-
-export async function saveFileToDB({
-  fileUrl,
-  fileName,
-  fileType,
-  fileSize,
-}: SaveFileParams) {
-  try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return { success: false, error: "Not authenticated" };
-    }
-
-    const file = await prisma.uploadedFile.create({
-      data: {
-        userId: session.user.id,
-        url: fileUrl,
-        filename: fileName,
-        fileType: fileType ?? null,
-        size: fileSize,
-      },
-    });
-
-    return { success: true, file };
-  } catch (error) {
-    console.error("[SAVE_FILE_ERROR]", error);
     return { success: false };
   }
 }
@@ -150,6 +116,19 @@ export async function createKb(params: CreateKbParams) {
         bot: { connect: { id: bot.id } },
       },
     });
+
+    if (files && Array.isArray(files) && files.length > 0) {
+      await prisma.uploadedFile.updateMany({
+        where: {
+          userId,
+          url: { in: files },
+          kbId: null,
+        },
+        data: {
+          kbId: kb.id,
+        },
+      });
+    }
 
     return { bot, kb: updatedKb };
   } catch (error) {
@@ -230,16 +209,32 @@ export async function deleteKb(kbId: string) {
     });
     if (!existingKb) throw new Error("Knowledge Base not found");
 
-    await prisma.knowledgeBase.delete({
-      where: {
-        id: existingKb.id,
-      },
+    const files = await prisma.uploadedFile.findMany({
+      where: { kbId: existingKb.id },
+      select: { meta: true },
     });
-  } catch (error) {
-    console.log(error);
-    if (error instanceof Error) {
-      throw new Error(error.message);
+
+    const filePaths = files.map(
+      (f) => (f.meta as { storagePath: string })?.storagePath,
+    );
+
+    if (files.length > 0) {
+      await deleteFilesFromFirebase(filePaths);
     }
-    throw new Error("Unexpected error occurred while deleting Knowledge Base");
+
+    await prisma.$transaction([
+      prisma.bot.deleteMany({ where: { knowledgeBaseId: existingKb.id } }),
+      prisma.document.deleteMany({ where: { kbId: existingKb.id } }),
+      prisma.embedding.deleteMany({ where: { kbId: existingKb.id } }),
+      prisma.uploadedFile.deleteMany({ where: { kbId: existingKb.id } }),
+      prisma.knowledgeBase.delete({ where: { id: existingKb.id } }),
+    ]);
+  } catch (error) {
+    console.error(error);
+    throw new Error(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error occurred while deleting Knowledge Base",
+    );
   }
 }
