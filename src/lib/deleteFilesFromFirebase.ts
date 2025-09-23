@@ -1,5 +1,20 @@
 import admin from "firebase-admin";
 
+// --- Firebase Admin Initialization ---
+if (!admin.apps.length) {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    });
+  } else {
+    admin.initializeApp({
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    });
+  }
+}
+
 const bucket = admin.storage().bucket();
 
 export async function deleteFilesFromFirebase(paths: string[]) {

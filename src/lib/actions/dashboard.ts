@@ -214,21 +214,39 @@ export async function deleteKb(kbId: string) {
       select: { meta: true },
     });
 
-    const filePaths = files.map(
-      (f) => (f.meta as { storagePath: string })?.storagePath,
-    );
+    const filesValidation =
+      files && Array.isArray(files) && files.length > 0 ? true : false;
 
-    if (files.length > 0) {
+    if (filesValidation) {
+      const filePaths = files
+        .map((f) => (f.meta as { storagePath: string })?.storagePath)
+        .filter((p): p is string => Boolean(p)) as string[];
+
       await deleteFilesFromFirebase(filePaths);
     }
 
-    await prisma.$transaction([
-      prisma.bot.deleteMany({ where: { knowledgeBaseId: existingKb.id } }),
-      prisma.document.deleteMany({ where: { kbId: existingKb.id } }),
-      prisma.embedding.deleteMany({ where: { kbId: existingKb.id } }),
-      prisma.uploadedFile.deleteMany({ where: { kbId: existingKb.id } }),
-      prisma.knowledgeBase.delete({ where: { id: existingKb.id } }),
-    ]);
+    let deleteTransactions = [];
+
+    if (filesValidation) {
+      deleteTransactions = [
+        prisma.bot.deleteMany({ where: { knowledgeBaseId: existingKb.id } }),
+        prisma.document.deleteMany({ where: { kbId: existingKb.id } }),
+        prisma.embedding.deleteMany({ where: { kbId: existingKb.id } }),
+        prisma.uploadedFile.deleteMany({ where: { kbId: existingKb.id } }),
+        prisma.knowledgeBase.delete({ where: { id: existingKb.id } }),
+      ];
+    } else {
+      deleteTransactions = [
+        prisma.bot.deleteMany({ where: { knowledgeBaseId: existingKb.id } }),
+        prisma.document.deleteMany({ where: { kbId: existingKb.id } }),
+        prisma.embedding.deleteMany({ where: { kbId: existingKb.id } }),
+        prisma.knowledgeBase.delete({ where: { id: existingKb.id } }),
+      ];
+    }
+
+    if (deleteTransactions.length > 0) {
+      await prisma.$transaction(deleteTransactions);
+    }
   } catch (error) {
     console.error(error);
     throw new Error(
