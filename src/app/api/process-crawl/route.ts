@@ -1,62 +1,21 @@
-export const runtime = "nodejs";
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// src/app/api/process-crawl/route.ts
 import { prisma } from "@/lib/prisma";
 import { Readability } from "@mozilla/readability";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import { Client as QStashClient } from "@upstash/qstash";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import * as cheerio from "cheerio";
+import { load } from "cheerio";
+import type { AnyNode, Element } from "domhandler";
 import { JSDOM } from "jsdom";
 import pLimit from "p-limit";
-import type { RetryContext } from "p-retry";
-import pRetry from "p-retry";
+import type { Browser, Page } from "puppeteer";
 import robotsParser from "robots-parser";
 
+export const runtime = "nodejs";
+
 const qstash = new QStashClient({ token: process.env.QSTASH_TOKEN! });
-
-type Limit = ReturnType<typeof pLimit>;
-
-interface ExtractedContent {
-  title: string;
-  content: string;
-  wordCount: number;
-}
-
-// Domain-specific crawling configurations
-const DOMAIN_CONFIGS: Record<
-  string,
-  {
-    crawlDelay: number;
-    maxConcurrent: number;
-    maxDepth: number;
-    respectRobots: boolean;
-    userAgent: string;
-  }
-> = {
-  "aoun.cx": {
-    crawlDelay: 2000,
-    maxConcurrent: 1,
-    maxDepth: 3,
-    respectRobots: true,
-    userAgent: "AounCrawler/1.0 (+https://aoun.cx/robots)",
-  },
-  "www.aoun.cx": {
-    crawlDelay: 2000,
-    maxConcurrent: 1,
-    maxDepth: 3,
-    respectRobots: true,
-    userAgent: "AounCrawler/1.0 (+https://aoun.cx/robots)",
-  },
-};
-
-// Default configuration for unknown domains
-const DEFAULT_CONFIG = {
-  crawlDelay: 1000,
-  maxConcurrent: 2,
-  maxDepth: 2,
-  respectRobots: true,
-  userAgent: "EnhancedWebCrawler/1.0",
-};
 
 // Simple in-memory robots cache to avoid refetching for every page on same domain
 const robotsCache = new Map<
@@ -65,9 +24,79 @@ const robotsCache = new Map<
 >();
 
 // Rate limiting per domain to be polite
-const domainLimits = new Map<string, { limit: Limit; lastRequest: number }>();
+const domainLimits = new Map<
+  string,
+  { limit: ReturnType<typeof pLimit>; lastRequest: number }
+>();
 
-// Tracking parameters to remove from URLs
+function getRateLimiter(origin: string) {
+  if (!domainLimits.has(origin)) {
+    domainLimits.set(origin, {
+      limit: pLimit(2), // Max 2 concurrent requests per domain
+      lastRequest: 0,
+    });
+  }
+  return domainLimits.get(origin)!;
+}
+
+// Type definitions
+type CheerioRoot = ReturnType<typeof load>;
+
+interface CrawlerConfig {
+  timeout: number;
+  maxRetries: number;
+  minWordCount: number;
+  puppeteerTimeout: number;
+  waitForDynamic: number;
+  enablePuppeteer: boolean;
+}
+
+interface UserAgents {
+  desktop: string;
+  mobile: string;
+  bot: string;
+}
+
+interface ExtractionResult {
+  title: string;
+  content: string;
+  wordCount: number;
+  method: string;
+  extractionMethod?: string;
+  html?: string;
+}
+
+interface CrawlStrategy {
+  name: string;
+  fn: () => Promise<{ result: ExtractionResult | null; html?: string }>;
+}
+
+interface RequestBody {
+  kbId: string;
+  webUrl: string;
+  userId: string;
+  depth?: number;
+}
+
+// Configuration
+const CRAWLER_CONFIG: CrawlerConfig = {
+  timeout: 45000, // Increased for RSC sites
+  maxRetries: 5, // More retries for RSC
+  minWordCount: 15, // Lower threshold for Arabic content
+  puppeteerTimeout: 20000,
+  waitForDynamic: 5000, // Longer wait for RSC hydration
+  enablePuppeteer: true, // Enable for stubborn RSC sites
+};
+
+// User agents for different strategies
+const USER_AGENTS: UserAgents = {
+  desktop:
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  mobile:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+  bot: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+};
+
 const TRACKING_PARAMS = [
   "utm_source",
   "utm_medium",
@@ -78,1025 +107,1173 @@ const TRACKING_PARAMS = [
   "gclid",
   "mc_cid",
   "mc_eid",
-  "_ga",
-  "_gid",
   "ref",
   "source",
 ];
 
-function getDomainConfig(url: string) {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    const baseHostname = hostname.replace(/^www\./, "");
-    return (
-      DOMAIN_CONFIGS[hostname] || DOMAIN_CONFIGS[baseHostname] || DEFAULT_CONFIG
-    );
-  } catch {
-    return DEFAULT_CONFIG;
-  }
-}
-
-function getRateLimiter(origin: string) {
-  if (!domainLimits.has(origin)) {
-    const config = getDomainConfig(origin);
-    domainLimits.set(origin, {
-      limit: pLimit(config.maxConcurrent),
-      lastRequest: 0,
-    });
-  }
-  return domainLimits.get(origin)!;
-}
-
 function canonicalizeUrl(raw: string): string {
   try {
     const url = new URL(raw);
-
-    // Remove tracking parameters
-    TRACKING_PARAMS.forEach((param) => url.searchParams.delete(param));
-
-    // Remove fragment
+    TRACKING_PARAMS.forEach((p) => url.searchParams.delete(p));
+    // remove fragment
     url.hash = "";
-
-    // Remove trailing slash except root
-    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
+    // remove trailing slash except root
+    if (url.pathname !== "/" && url.pathname.endsWith("/"))
       url.pathname = url.pathname.replace(/\/+$/, "");
-    }
-
-    // Stable parameter ordering
+    // stable param ordering
     const params = Array.from(url.searchParams.entries()).sort();
     url.search = "";
-    for (const [k, v] of params) {
-      url.searchParams.append(k, v);
-    }
-
+    for (const [k, v] of params) url.searchParams.append(k, v);
     return url.toString();
   } catch {
     return raw;
   }
 }
 
-function normalizeUrl(base: string, href: string): string | null {
-  if (!href || typeof href !== "string") return null;
-
-  try {
-    const url = new URL(href.trim(), base);
-    return canonicalizeUrl(url.toString());
-  } catch {
-    return null;
-  }
-}
-
 async function fetchRobotsForOrigin(origin: string) {
+  // Check cache (15 min TTL)
   const cached = robotsCache.get(origin);
   if (cached && Date.now() - cached.fetchedAt < 900_000) return cached.parser;
 
   try {
     const robotsUrl = `${origin}/robots.txt`;
-    const config = getDomainConfig(origin);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const res = await fetch(robotsUrl, {
-      headers: { "User-Agent": config.userAgent },
-      signal: AbortSignal.timeout(10000),
-    });
-
-    const txt = res.ok ? await res.text() : "";
-    const parser = robotsParser(robotsUrl, txt);
-    robotsCache.set(origin, { parser, fetchedAt: Date.now() });
-    return parser;
+    try {
+      const res = await fetch(robotsUrl, {
+        headers: { "User-Agent": USER_AGENTS.bot },
+        signal: controller.signal,
+      });
+      const txt = res.ok ? await res.text() : "";
+      const parser = robotsParser(robotsUrl, txt);
+      robotsCache.set(origin, { parser, fetchedAt: Date.now() });
+      return parser;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch (err) {
     console.warn(`Failed to fetch robots.txt for ${origin}:`, err);
-    return robotsParser("", "");
+    return robotsParser("", ""); // permissive fallback
   }
 }
 
-async function fetchWithRetry(url: string): Promise<string> {
-  const config = getDomainConfig(url);
+class EnhancedWebCrawler {
+  private config: CrawlerConfig;
+  private browser: Browser | null = null;
 
-  return pRetry(
-    async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+  constructor(config: CrawlerConfig = CRAWLER_CONFIG) {
+    this.config = config;
+  }
 
-      try {
-        const res = await fetch(url, {
-          headers: {
-            "User-Agent": config.userAgent,
-            Accept:
-              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            DNT: "1",
-            Connection: "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Cache-Control": "no-cache",
-          },
-          signal: controller.signal,
-        });
+  async crawl(url: string): Promise<ExtractionResult & { html?: string }> {
+    console.log(`Starting enhanced crawl for: ${url}`);
 
-        clearTimeout(timeoutId);
-
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-
-        const contentType = res.headers.get("content-type") || "";
-        if (!contentType.toLowerCase().includes("text/html")) {
-          throw new Error(`Not HTML content: ${contentType}`);
-        }
-
-        const buffer = await res.arrayBuffer();
-        const text = new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-
-        if (text.length === 0) {
-          throw new Error("Empty response body");
-        }
-
-        return text;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    },
-    {
-      retries: 3,
-      minTimeout: 2000,
-      maxTimeout: 8000,
-      factor: 2,
-      onFailedAttempt: ({ error, attemptNumber }: RetryContext) => {
-        console.warn(
-          `Attempt ${attemptNumber} failed for ${url}:`,
-          error.message,
-        );
-      },
-    },
-  );
-}
-
-function extractLinksEnhanced(
-  html: string,
-  baseUrl: string,
-  origin: string,
-): string[] {
-  const $ = cheerio.load(html);
-  const links = new Set<string>();
-
-  // Navigation and menu links (high priority)
-  $("nav a, .navigation a, .menu a, .navbar a, .header a").each((_, el) => {
-    const href = $(el).attr("href");
-    if (href) addLink(href);
-  });
-
-  // Main content links
-  $("main a, article a, .content a, .main-content a").each((_, el) => {
-    const href = $(el).attr("href");
-    if (href) addLink(href);
-  });
-
-  // Breadcrumb and pagination links
-  $(".breadcrumb a, .pagination a, .pager a").each((_, el) => {
-    const href = $(el).attr("href");
-    if (href) addLink(href);
-  });
-
-  // Footer links (lower priority, but still useful)
-  $("footer a").each((_, el) => {
-    const href = $(el).attr("href");
-    const text = $(el).text().trim();
-    // Only include footer links that look like pages, not social media
-    if (href && !text.match(/facebook|twitter|instagram|linkedin|github/i)) {
-      addLink(href);
+    // Check robots.txt and crawl-delay (keep existing)
+    const origin = new URL(url).origin;
+    const robots = await fetchRobotsForOrigin(origin);
+    if (!robots.isAllowed(url, USER_AGENTS.bot)) {
+      throw new Error("Blocked by robots.txt");
     }
-  });
 
-  // Next.js specific: extract from router data
-  const nextDataMatch = html.match(/__NEXT_DATA__\s*=\s*({.*?});/);
-  if (nextDataMatch) {
-    try {
-      const data = JSON.parse(nextDataMatch[1]);
-      if (data.props?.pageProps?.routes) {
-        data.props.pageProps.routes.forEach((route: string) => {
-          addLink(route);
-        });
+    // Respect crawl-delay (keep existing)
+    const crawlDelay = robots.getCrawlDelay(USER_AGENTS.bot) || 0;
+    if (crawlDelay > 0) {
+      await this.delay(Math.min(crawlDelay * 1000, 10000));
+    }
+
+    // Rate limiting (keep existing)
+    const { limit, lastRequest } = getRateLimiter(origin);
+    const timeSinceLastRequest = Date.now() - lastRequest;
+    const minInterval = 1000;
+
+    if (timeSinceLastRequest < minInterval) {
+      await this.delay(minInterval - timeSinceLastRequest);
+    }
+
+    // Strategy prioritization based on site characteristics
+    const strategies: CrawlStrategy[] = [];
+
+    // For modern Next.js sites, try static with enhanced headers first
+    strategies.push({ name: "static", fn: () => this.crawlStatic(url) });
+    strategies.push({
+      name: "readability",
+      fn: () => this.crawlWithReadability(url),
+    });
+    strategies.push({ name: "semantic", fn: () => this.crawlSemantic(url) });
+
+    // Add dynamic strategy if available (for fallback)
+    if (this.config.enablePuppeteer) {
+      strategies.push({ name: "dynamic", fn: () => this.crawlDynamic(url) });
+    }
+
+    // Try strategies in order
+    for (const strategy of strategies) {
+      try {
+        console.log(`Trying ${strategy.name} strategy...`);
+        const { result, html } = await this.withRetry(() => strategy.fn());
+
+        if (this.isValidResult(result)) {
+          console.log(`✓ ${strategy.name} extraction successful`);
+          getRateLimiter(origin).lastRequest = Date.now();
+          return { ...result, extractionMethod: strategy.name, html };
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : "Unknown error";
+        console.warn(`${strategy.name} strategy failed:`, errorMessage);
+        // Continue to next strategy instead of aborting
       }
-      // Extract from build manifest if available
-      if (data.buildManifest?.pages) {
-        Object.keys(data.buildManifest.pages).forEach((page: string) => {
-          if (page !== "/_app" && page !== "/_error") {
-            addLink(page);
+    }
+
+    // Final fallback
+    const fallback = await this.crawlFallback(url);
+    getRateLimiter(origin).lastRequest = Date.now();
+    return { ...fallback, extractionMethod: "fallback" };
+  }
+
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    retries?: number,
+  ): Promise<T> {
+    const max = retries ?? this.config.maxRetries;
+    let lastError: Error = new Error("No attempts made");
+
+    for (let i = 0; i < max; i++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (i < max - 1) {
+          await this.delay(1000 * (i + 1)); // Exponential backoff
+        }
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async crawlDynamic(
+    url: string,
+  ): Promise<{ result: ExtractionResult | null; html?: string }> {
+    // Defensive: import puppeteer lazily and handle absence gracefully
+    let page: Page | null = null;
+
+    try {
+      let puppeteerModule: any;
+      try {
+        puppeteerModule = await import("puppeteer");
+      } catch (impErr) {
+        console.warn("Puppeteer module not available:", impErr);
+        // Skip dynamic strategy when puppeteer isn't installed in the environment
+        return { result: null };
+      }
+
+      const puppeteer = puppeteerModule.default || puppeteerModule;
+
+      if (!this.browser) {
+        try {
+          // Allow overriding executable path via env
+          const launchOptions: any = {
+            headless: true,
+            args: [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage",
+              "--disable-web-security",
+              "--disable-blink-features=AutomationControlled",
+            ],
+          };
+
+          if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+            launchOptions.executablePath =
+              process.env.PUPPETEER_EXECUTABLE_PATH;
+          }
+
+          this.browser = await puppeteer.launch(launchOptions);
+        } catch (launchErr) {
+          console.warn(
+            "Puppeteer launch failed (missing Chrome or bad config):",
+            launchErr,
+          );
+          // Return null result so caller tries other strategies/fallbacks
+          return { result: null };
+        }
+      }
+
+      page = await (this.browser as Browser).newPage();
+
+      // Set viewport and user agent
+      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setUserAgent(USER_AGENTS.desktop);
+
+      // Block unnecessary resources
+      // Note: some puppeteer versions require request interception to be enabled before 'request' listeners
+      try {
+        await page.setRequestInterception(true);
+        page.on("request", (req) => {
+          const resourceType = req.resourceType();
+          if (["image", "font", "media"].includes(resourceType)) {
+            req.abort();
+          } else {
+            req.continue();
           }
         });
+      } catch (e) {
+        // If request interception isn't supported, continue without blocking
+        console.warn(
+          "Request interception not available, continuing without it:",
+          e,
+        );
       }
-    } catch (e) {
-      console.warn("Failed to parse Next.js data:", e);
+
+      // Navigate and wait for content
+      await page.goto(url, {
+        waitUntil: "networkidle2",
+        timeout: this.config.puppeteerTimeout,
+      });
+
+      // Wait for RSC hydration / visible text
+      try {
+        await page.waitForFunction(
+          () => (document.body?.innerText || "").length > 100,
+          {
+            timeout: 10000,
+          },
+        );
+      } catch {
+        // ignore — we'll still try to extract
+      }
+
+      // Wait for dynamic content
+      await this.delay(this.config.waitForDynamic);
+
+      // Try to trigger any lazy loading
+      await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight / 2);
+      });
+      await this.delay(1000);
+
+      // Get the rendered HTML
+      const html = await page.content();
+      const title = await page.title();
+
+      // Process with multiple strategies
+      const readabilityResult = this.processWithReadability(html, url);
+      if (this.isValidResult(readabilityResult)) {
+        return {
+          result: {
+            ...readabilityResult,
+            title: title || readabilityResult.title,
+          },
+          html,
+        };
+      }
+
+      const semanticResult = this.processSemanticHTML(html, url);
+      if (this.isValidResult(semanticResult)) {
+        return {
+          result: { ...semanticResult, title: title || semanticResult.title },
+          html,
+        };
+      }
+
+      // Fallback to full page text
+      const bodyText = await page.evaluate(() => {
+        const elementsToRemove = document.querySelectorAll(
+          "script, style, nav, header, footer, aside",
+        );
+        elementsToRemove.forEach((el) => el.remove());
+        return document.body.innerText || document.body.textContent || "";
+      });
+
+      return {
+        result: this.createResult(title, bodyText, "dynamic-fallback"),
+        html,
+      };
+    } finally {
+      if (page) await page.close();
     }
   }
 
-  // Try to extract from sitemap links in the page
-  $('a[href*="sitemap"]').each((_, el) => {
-    const href = $(el).attr("href");
-    if (href) addLink(href);
-  });
+  private async crawlStatic(
+    url: string,
+  ): Promise<{ result: ExtractionResult | null; html?: string }> {
+    const html: string = await this.fetchHTML(url, USER_AGENTS.desktop);
 
-  function addLink(href: string) {
-    const full = normalizeUrl(baseUrl, href);
-    if (!full) return;
+    // Now that we have proper HTML, process it normally
+    if (this.detectSPA(html)) {
+      throw new Error("SPA detected, skipping static strategy");
+    }
+
+    let result =
+      this.processSemanticHTML(html, url) ||
+      this.processWithReadability(html, url);
+
+    // If we still have RSC payload issues after decompression
+    if (!this.isGoodExtraction(result, url)) {
+      const flightText = this.extractFromNextFlight(html);
+      if (flightText) {
+        const cleaned = this.cleanText(flightText);
+        const wc = cleaned.split(/\s+/).filter(Boolean).length;
+        if (wc >= this.config.minWordCount) {
+          const title =
+            this.extractTitleFromFlight(html) || this.extractTitleFromUrl(url);
+          result = this.createResult(title, cleaned, "flight-json");
+        }
+      }
+    }
+
+    if (!this.isGoodExtraction(result, url)) {
+      result = this.processContentDensity(html, url);
+    }
+
+    return { result, html };
+  }
+
+  async testCompressionFix(url: string): Promise<void> {
+    console.log(`\n=== Testing compression fix for ${url} ===`);
 
     try {
-      const u = new URL(full);
+      const html = await this.fetchHTML(url, USER_AGENTS.desktop);
+      console.log(`✓ Success! Got ${html.length} chars of HTML`);
+      console.log(`First 200 chars: ${html.substring(0, 200)}...`);
 
-      // Must be same origin and HTTP(S)
-      if (u.origin !== origin || !["https:", "http:"].includes(u.protocol))
-        return;
-
-      // Skip unwanted file types and patterns
-      if (
-        full.match(
-          /\.(jpg|jpeg|png|gif|svg|pdf|zip|mp4|mp3|css|js|woff|woff2|ico|xml|json)(\?|$)/i,
-        )
-      )
-        return;
-
-      // Skip common non-content paths
-      if (
-        full.match(
-          /\/(login|register|logout|admin|api|cdn|assets|static|wp-admin|wp-content|_next)\//i,
-        )
-      )
-        return;
-
-      // Skip anchor links, mailto, tel, etc.
-      if (href.match(/^(mailto:|tel:|javascript:|#|ftp:|file:)/)) return;
-
-      // Skip query-heavy URLs (likely dynamic/filtered content)
-      if (u.searchParams.toString().length > 200) return;
-
-      // Skip URLs with session IDs or temporary tokens
-      if (full.match(/[?&](session|token|sid|jsessionid)=/i)) return;
-
-      links.add(full);
-    } catch {
-      // Invalid URL, skip
+      // Test if it looks like HTML
+      if (html.includes("<!DOCTYPE html>") || html.includes("<html")) {
+        console.log("✓ Valid HTML detected");
+      } else if (html.includes('"$Sreact.fragment"')) {
+        console.log("⚠ Got RSC payload, but at least it's readable text");
+      } else {
+        console.log("⚠ Unknown content type");
+      }
+    } catch (error) {
+      console.error(`✗ Test failed: ${error}`);
     }
   }
 
-  return Array.from(links);
-}
+  // Extract better titles from Next.js Flight payloads
+  private extractTitleFromFlight(html: string): string | null {
+    try {
+      // Method 1: Look for title in metadata objects
+      const titleMatches = html.match(/"title"[^}]*?"children":\s*"([^"]+)"/);
+      if (titleMatches && titleMatches[1] && titleMatches[1].length > 3) {
+        return titleMatches[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      }
 
-// Enhanced content cleaning functions
-function cleanExtractedContent(content: string): string {
-  let cleaned = content
-    // Remove HTML fragments at the beginning
-    .replace(/^[^>]*>[^<]*<[^>]*>/g, "")
-    // Remove meta tag fragments
-    .replace(/\/><title>[^<]*<\/title><meta name=[^>]*>/g, "")
-    .replace(/<title>[^<]*<\/title>/g, "")
-    .replace(/<meta[^>]*>/g, "")
-    // Remove Next.js internal code patterns
-    .replace(/\$L\w+/g, " ")
-    .replace(/\["?\$"?,/g, " ")
-    .replace(/,null,\{[^}]*\}/g, " ")
-    .replace(/,\{\"children\":/g, " ")
-    .replace(/\"className\":\s*\"[^"]*\"/g, " ")
-    .replace(/\"data-slot\":\s*\"[^"]*\"/g, " ")
-    // Clean up React/Next.js patterns
-    .replace(/\]\}\]\}\]/g, " ")
-    .replace(/\{\["?\$"?,/g, " ")
-    .replace(/self\.__next_f[^;]*;/g, " ")
-    .replace(/window\.dataLayer[^}]*\}/g, " ")
-    // Remove common technical fragments
-    .replace(/gtag\([^)]*\);?/g, " ")
-    .replace(/fbq\([^)]*\);?/g, " ")
-    .replace(/lucide lucide-\w+/g, " ")
-    .replace(/aria-hidden[^>]*>/g, " ")
-    .replace(/strokeWidth|strokeLinecap|strokeLinejoin/g, " ")
-    // Clean up whitespace and line breaks
-    .replace(/\\n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+      // Method 2: Look for page titles with common patterns
+      const pageTitlePatterns = [
+        /"children":\s*"([^\"]*(?:FAQ|Contact|About|Home|Blog|Pricing|Terms|Privacy)[^\"]*?)"/i,
+        /"children":\s*"([^\"]*(?:الأسئلة|تواصل|حول|الرئيسية|المدونة|الأسعار|شروط|الخصوصية)[^\"]*?)"/i, // Arabic
+      ];
 
-  // Remove technical noise at the beginning and end
-  cleaned = cleaned
-    .replace(/^[^a-zA-Z\u0600-\u06FF]*/, "") // Remove non-letter characters at start
-    .replace(/[^a-zA-Z\u0600-\u06FF\s.!?]*$/, ""); // Remove non-letter/punctuation at end
+      for (const pattern of pageTitlePatterns) {
+        const matches = html.match(pattern);
+        if (matches && matches[1] && matches[1].length > 3) {
+          return matches[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        }
+      }
 
-  return cleaned;
-}
+      // Method 3: Look for h1 content
+      const h1Patterns = [
+        /"h1"[^}]*"children":\s*"([^"]+)"/,
+        /\["h1"[^}]*"children":\s*"([^"]+)"/,
+      ];
 
-// Enhanced title extraction with better fallbacks
-function extractCleanTitle(html: string, url: string, content: string): string {
-  // Try multiple title extraction methods
-  const titlePatterns = [
-    /<title[^>]*>([^<]+)<\/title>/i,
-    /<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i,
-    /<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"/i,
-    /<h1[^>]*>([^<]+)<\/h1>/i,
-  ];
+      for (const pattern of h1Patterns) {
+        const matches = html.match(pattern);
+        if (matches && matches[1] && matches[1].length > 3) {
+          return matches[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        }
+      }
 
-  for (const pattern of titlePatterns) {
-    const match = html.match(pattern);
-    if (match) {
-      let title = match[1]
-        .replace(/&quot;/g, '"')
-        .replace(/&#x27;/g, "'")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .trim();
+      // Method 4: Look for any meaningful heading text
+      const headingPatterns = [/"children":\s*"([^\"]{10,100})"/g];
 
-      // Clean up common title patterns
-      title = title.replace(/\s*[|\-–]\s*.*$/, "").trim();
+      for (const pattern of headingPatterns) {
+        let match;
+        while ((match = pattern.exec(html)) !== null) {
+          const candidate = match[1]
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, "\\");
 
-      if (
-        title.length > 5 &&
-        title.length < 200 &&
-        !title.includes("<") &&
-        !title.includes(">")
-      ) {
+          if (
+            candidate.length >= 10 &&
+            candidate.length <= 100 &&
+            /^[A-Z\u0600-\u06FF]/.test(candidate) &&
+            !candidate.includes("className") &&
+            !candidate.includes("onClick") &&
+            !candidate.includes("href") &&
+            !candidate.includes("src") &&
+            !/^[\d\s\-_]+$/.test(candidate)
+          ) {
+            return candidate;
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.warn("Error extracting title from flight payload:", error);
+      return null;
+    }
+  }
+
+  // Also need the extractTitleFromUrl helper method I referenced:
+  private extractTitleFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split("/").filter(Boolean);
+
+      if (pathParts.length > 0) {
+        const lastPart = pathParts[pathParts.length - 1];
+
+        const titleMap: Record<string, string> = {
+          faq: "FAQ",
+          contact: "Contact Us",
+          about: "About",
+          pricing: "Pricing",
+          blog: "Blog",
+          terms: "Terms of Service",
+          privacy: "Privacy Policy",
+          ar: "Arabic",
+          en: "English",
+        };
+
+        const title =
+          titleMap[lastPart.toLowerCase()] ||
+          lastPart.charAt(0).toUpperCase() +
+            lastPart.slice(1).replace(/[-_]/g, " ");
+
+        return title;
+      }
+
+      const hostname = urlObj.hostname.replace(/^www\./, "");
+      return hostname.charAt(0).toUpperCase() + hostname.slice(1);
+    } catch {
+      return "Extracted Content";
+    }
+  }
+
+  private async crawlWithReadability(
+    url: string,
+  ): Promise<{ result: ExtractionResult | null; html?: string }> {
+    const langHeader = url.includes("/ar/") ? { "Accept-Language": "ar" } : {};
+    const html = await this.fetchHTML(
+      url,
+      USER_AGENTS.bot,
+      langHeader as { "Accept-Language": string },
+    );
+    return { result: this.processWithReadability(html, url), html };
+  }
+
+  private async crawlSemantic(
+    url: string,
+  ): Promise<{ result: ExtractionResult | null; html?: string }> {
+    const html = await this.fetchHTML(url, USER_AGENTS.desktop);
+    return { result: this.processSemanticHTML(html, url), html };
+  }
+
+  private async crawlFallback(url: string): Promise<ExtractionResult> {
+    try {
+      const html = await this.fetchHTML(url, USER_AGENTS.desktop);
+      return this.processFallback(html, url);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      return {
+        title: "Extraction Failed",
+        content: `Unable to extract content: ${errorMessage}`,
+        wordCount: 0,
+        method: "failed",
+      };
+    }
+  }
+
+  private async fetchHTML(
+    url: string,
+    userAgent: string,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<string> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+
+    try {
+      const headers = {
+        "User-Agent": userAgent,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        ...extraHeaders,
+      };
+
+      console.log(
+        `[fetchHTML] Fetching ${url} with UA: ${userAgent.substring(0, 50)}...`,
+      );
+
+      const response = await fetch(url, {
+        headers,
+        signal: controller.signal,
+        redirect: "follow",
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const text = await response.text();
+
+      console.log(
+        `[fetchHTML] ${url} status=${response.status} content-type=${response.headers.get("content-type")} length=${text.length} compressed=${response.headers.get("content-encoding") || "none"}`,
+      );
+
+      if (this.isValidHTMLContent(text)) {
+        return text;
+      } else {
+        console.warn(
+          `[fetchHTML] Got non-HTML content from ${url}, first 100 chars:`,
+          text.substring(0, 100),
+        );
+        throw new Error("Response is not valid HTML content");
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private isValidHTMLContent(content: string): boolean {
+    const hasHTMLTags = /<[a-z][\s\S]*>/i.test(content);
+    const hasReadableText = /[a-zA-Z\u0600-\u06FF]{10,}/.test(content);
+    const isNotBinary = !/[\x00-\x08\x0E-\x1F\x7F-\xFF]{5,}/.test(
+      content.substring(0, 200),
+    );
+
+    return (hasHTMLTags || hasReadableText) && isNotBinary;
+  }
+
+  private detectSPA(html: string): boolean {
+    const $ = load(html);
+
+    const indicators = [
+      "react",
+      "vue",
+      "angular",
+      "app-root",
+      "ng-app",
+      "data-reactroot",
+      "__NEXT_DATA__",
+      "__NUXT__",
+    ];
+
+    const bodyText = $("body").text().toLowerCase();
+    const hasMinimalContent = bodyText.replace(/\s+/g, " ").trim().length < 200;
+
+    const hasFrameworkIndicators = indicators.some((indicator) =>
+      html.toLowerCase().includes(indicator),
+    );
+
+    const hasLargeScripts = $("script").length > 5;
+
+    return hasMinimalContent && (hasFrameworkIndicators || hasLargeScripts);
+  }
+
+  private processWithReadability(
+    html: string,
+    _url: string,
+  ): ExtractionResult | null {
+    try {
+      const dom = new JSDOM(html, { url: _url });
+      const reader = new Readability(dom.window.document);
+      const article = reader.parse();
+
+      if (article?.textContent) {
+        const cleanContent = this.cleanText(article.textContent);
+        return this.createResult(
+          article.title || "Untitled",
+          cleanContent,
+          "readability",
+        );
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.warn("Readability processing failed:", errorMessage);
+    }
+    return null;
+  }
+
+  private processSemanticHTML(
+    html: string,
+    _url: string,
+  ): ExtractionResult | null {
+    try {
+      const $ = load(html);
+
+      // Remove noise elements
+      this.removeNoiseElements($);
+
+      // Try semantic selectors in priority order
+      const semanticSelectors = [
+        "main article",
+        '[role="main"] article',
+        "main",
+        "article",
+        '[role="main"]',
+        ".content-area",
+        ".main-content",
+        ".post-content",
+        ".entry-content",
+        ".article-content",
+        "#content",
+        "#main-content",
+      ];
+
+      for (const selector of semanticSelectors) {
+        const element = $(selector).first() as cheerio.Cheerio<AnyNode>;
+        if (element.length > 0) {
+          const text = this.extractTextFromElement(element);
+          if (text.length > 200) {
+            const title = this.extractTitle($);
+            return this.createResult(title, text, "semantic");
+          }
+        }
+      }
+
+      // Try content density as fallback
+      return this.processContentDensity(html, _url);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      console.warn("Semantic processing failed:", errorMessage);
+    }
+    return null;
+  }
+
+  private processContentDensity(
+    html: string,
+    _url: string,
+  ): ExtractionResult | null {
+    try {
+      const $ = load(html);
+      this.removeNoiseElements($);
+
+      let bestElement: cheerio.Cheerio<AnyNode> | null = null;
+      let bestScore = 0;
+
+      $("div, section, article, main, .content").each((_, element) => {
+        const $el = $(element) as cheerio.Cheerio<AnyNode>;
+        const score = this.calculateAdvancedContentScore($el);
+
+        if (score > bestScore && score > 100) {
+          bestScore = score;
+          bestElement = $el;
+        }
+      });
+
+      if (bestElement) {
+        const beCheerio = bestElement as cheerio.Cheerio<AnyNode>;
+        const node = beCheerio.get(0) as AnyNode | undefined;
+
+        if (node && (node as AnyNode).type === "tag") {
+          const be = beCheerio as cheerio.Cheerio<Element>;
+          const text = this.extractTextFromElement(be);
+          const title =
+            this.extractTitle($) || be.find("h1, h2, h3").first().text().trim();
+
+          return this.createResult(title, text, "density");
+        } else {
+          const text = this.extractTextFromElement(beCheerio);
+          const title = this.extractTitle($);
+          return this.createResult(title, text, "density");
+        }
+      }
+    } catch (error) {
+      console.warn("Content density processing failed:", error);
+    }
+    return null;
+  }
+
+  private processFallback(html: string, _url: string): ExtractionResult {
+    const $ = load(html);
+    this.removeNoiseElements($);
+
+    const bodyText = $("body").text();
+    const cleanText = this.cleanText(bodyText);
+    const title = this.extractTitle($);
+
+    return this.createResult(
+      title,
+      cleanText.length > 100 ? cleanText : "No meaningful content found",
+      "fallback",
+    );
+  }
+
+  private removeNoiseElements($: CheerioRoot): void {
+    const noiseSelectors = [
+      "script",
+      "style",
+      "nav",
+      "header",
+      "footer",
+      "aside",
+      "noscript",
+      ".advertisement",
+      ".ads",
+      ".social",
+      ".comments",
+      ".sidebar",
+      ".navigation",
+      ".menu",
+      ".breadcrumb",
+      ".cookie",
+      ".popup",
+      '[class*="ad-"]',
+      '[class*="advertisement"]',
+      '[class*="banner"]',
+      '[class*="social"]',
+      '[id*="comment"]',
+      '[class*="share"]',
+    ];
+
+    $(noiseSelectors.join(", ")).remove();
+
+    $("div, section").each((_, el) => {
+      const $el = $(el);
+      const text = $el.text().trim();
+      const links = $el.find("a").length;
+
+      if (text.length < 100 && links > 3) {
+        $el.remove();
+      }
+    });
+  }
+
+  private extractTextFromElement($element: cheerio.Cheerio<AnyNode>): string {
+    // Convert to readable text with basic formatting
+    return this.cleanText($element.text());
+  }
+
+  private extractTitle($: CheerioRoot): string {
+    const titleCandidates = [
+      () => $("h1").first().text().trim(),
+      () => $('[class*="title"], [class*="headline"]').first().text().trim(),
+      () =>
+        $("title")
+          .text()
+          .replace(/\s*[|\-–]\s*.*$/, "")
+          .trim(),
+      () => $('meta[property="og:title"]').attr("content") || "",
+      () => $('meta[name="twitter:title"]').attr("content") || "",
+    ];
+
+    for (const getTitle of titleCandidates) {
+      const title = getTitle();
+      if (title && title.length > 3 && title.length < 200) {
         return title;
       }
     }
+
+    return "Untitled";
   }
 
-  // Fallback: extract from content
-  const contentLines = content
-    .split(/[.!?\n]/)
-    .filter(
-      (line) =>
-        line.trim().length > 10 &&
-        line.trim().length < 100 &&
-        !line.includes("$") &&
-        !line.includes("{") &&
-        !line.includes("}"),
-    );
+  private calculateAdvancedContentScore(
+    $element: cheerio.Cheerio<AnyNode>,
+  ): number {
+    const text = $element.text();
+    const textLength = text.length;
+    const linkText = $element.find("a").text();
+    const linkLength = linkText.length;
+    const paragraphs = $element.find("p").length;
+    const headings = $element.find("h1, h2, h3, h4, h5, h6").length;
+    const lists = $element.find("ul, ol").length;
+    const childElements = $element.children().length;
 
-  if (contentLines.length > 0) {
-    return contentLines[0].trim();
+    if (textLength < 100) return 0;
+
+    const contentRatio =
+      textLength > 0 ? (textLength - linkLength) / textLength : 0;
+    const paragraphBonus = Math.min(paragraphs * 15, 150);
+    const headingBonus = Math.min(headings * 20, 100);
+    const listBonus = Math.min(lists * 10, 50);
+    const complexityPenalty = childElements > 30 ? -100 : 0;
+    const linkDensityPenalty = linkLength > textLength * 0.3 ? -50 : 0;
+
+    const sentenceCount = text
+      .split(/[.!?]+/)
+      .filter((s: string) => s.trim().length > 10).length;
+    const avgSentenceLength =
+      sentenceCount > 0 ? textLength / sentenceCount : 0;
+    const sentenceQualityBonus =
+      avgSentenceLength > 50 && avgSentenceLength < 200 ? 50 : 0;
+
+    const lengthScore =
+      textLength < 2000 ? textLength : 2000 + Math.log(textLength - 2000) * 100;
+
+    return (
+      lengthScore * contentRatio +
+      paragraphBonus +
+      headingBonus +
+      listBonus +
+      sentenceQualityBonus +
+      complexityPenalty +
+      linkDensityPenalty
+    );
   }
 
-  // Final fallback: generate from URL
-  try {
-    const urlPath = new URL(url).pathname;
-    const pathParts = urlPath.split("/").filter((p) => p.length > 0);
-    if (pathParts.length > 0) {
-      const lastPart = pathParts[pathParts.length - 1];
-      return (
-        lastPart.charAt(0).toUpperCase() + lastPart.slice(1).replace(/-/g, " ")
-      );
-    }
-  } catch {}
-
-  return "Untitled";
-}
-
-// Enhanced content extraction with multiple strategies
-async function extractMainContent(
-  html: string,
-  url: string,
-): Promise<ExtractedContent | null> {
-  console.log(`Starting enhanced content extraction for ${url}`);
-
-  // Strategy 1: Enhanced Next.js SSR extraction
-  const nextjsContent = await extractFromNextjsSSREnhanced(html, url);
-  if (nextjsContent && validateExtractedContent(nextjsContent)) {
-    console.log(
-      `Next.js SSR extraction successful: ${nextjsContent.wordCount} words`,
-    );
-    logExtractionResults(url, nextjsContent);
-    debugContentExtraction(nextjsContent, url);
-    return nextjsContent;
+  private cleanText(text: string): string {
+    return text
+      .replace(/\s+/g, " ")
+      .replace(/\n\s*\n/g, "\n")
+      .trim();
   }
 
-  // Strategy 2: DOM-based extraction with SSR awareness
-  const domContent = await extractFromDOMEnhanced(html, url);
-  if (domContent && validateExtractedContent(domContent)) {
-    console.log(
-      `Enhanced DOM extraction successful: ${domContent.wordCount} words`,
-    );
-    logExtractionResults(url, domContent);
-    debugContentExtraction(domContent, url);
-    return domContent;
-  }
-
-  // Strategy 3: Readability as final fallback
-  const readabilityContent = await extractWithReadability(html, url);
-  if (readabilityContent && validateExtractedContent(readabilityContent)) {
-    console.log(
-      `Readability extraction successful: ${readabilityContent.wordCount} words`,
-    );
-    logExtractionResults(url, readabilityContent);
-    debugContentExtraction(readabilityContent, url);
-    return readabilityContent;
-  }
-
-  console.log(`All extraction strategies failed for ${url}`);
-  return null;
-}
-
-async function extractFromNextjsSSREnhanced(
-  html: string,
-  url: string,
-): Promise<ExtractedContent | null> {
-  try {
-    console.log("Enhanced Next.js SSR extraction starting...");
-
-    // Find all Next.js self.__next_f script tags
-    const scriptMatches = html.match(
-      /<script[^>]*>.*?self\.__next_f.*?<\/script>/gs,
-    );
-    if (!scriptMatches || scriptMatches.length === 0) {
-      console.log("No Next.js script tags found");
-      return null;
-    }
-
-    console.log(`Found ${scriptMatches.length} Next.js script tags`);
-
-    let cleanContent = "";
-
-    // Content quality scoring
-    const contentScores: Array<{ text: string; score: number }> = [];
-
-    for (const scriptTag of scriptMatches) {
-      const potentialContent = extractContentStrings(scriptTag);
-
-      for (const text of potentialContent) {
-        const score = scoreContentQuality(text, url);
-        if (score > 0.2) {
-          // Lower threshold for more content
-          const cleanText = cleanExtractedContent(text);
-          if (cleanText.length > 20) {
-            // Must have reasonable length after cleaning
-            contentScores.push({ text: cleanText, score });
-          }
-        }
-      }
-    }
-
-    // Sort by quality score and build content
-    contentScores.sort((a, b) => b.score - a.score);
-
-    const seenContent = new Set<string>();
-    const usedSentences = new Set<string>();
-
-    for (const { text, score } of contentScores) {
-      const sentences = text
-        .split(/[.!?؟]/)
-        .filter((s) => s.trim().length > 15);
-
-      for (const sentence of sentences) {
-        const normalized = sentence.trim().toLowerCase();
-
-        // Avoid duplicate sentences
-        if (seenContent.has(normalized) || usedSentences.has(normalized))
-          continue;
-
-        // Skip sentences that are mostly technical
-        if (
-          sentence.includes("$") ||
-          sentence.includes("className") ||
-          sentence.includes("onClick") ||
-          sentence.includes("href=")
-        )
-          continue;
-
-        seenContent.add(normalized);
-        usedSentences.add(normalized);
-        cleanContent += sentence.trim() + ". ";
-
-        // Stop when we have enough quality content
-        if (cleanContent.length > 3000) break;
-      }
-
-      if (cleanContent.length > 3000) break;
-    }
-
-    // Final cleanup
-    cleanContent = cleanExtractedContent(cleanContent);
-
-    if (cleanContent.length < 100) {
-      console.log("Not enough quality content extracted after cleaning");
-      return null;
-    }
-
-    // Extract clean title
-    const title = extractCleanTitle(html, url, cleanContent);
-
+  private createResult(
+    title: string | null,
+    content: string,
+    method: string,
+  ): ExtractionResult {
+    const cleanContent = this.cleanText(content);
     const wordCount = cleanContent
       .split(/\s+/)
       .filter((w) => w.length > 0).length;
 
     return {
-      title,
+      title: title || "Untitled",
       content: cleanContent,
       wordCount,
+      method,
     };
-  } catch (error) {
-    console.error("Error in enhanced Next.js SSR extraction:", error);
-    return null;
-  }
-}
-
-function extractContentStrings(scriptContent: string): string[] {
-  const strings: string[] = [];
-
-  // Focus on the most reliable patterns first
-  const patterns = [
-    // High-confidence content patterns
-    /children['"]*:\s*['"]([\s\S]{20,1000}?)['"]/g,
-    /textContent['"]*:\s*['"]([\s\S]{20,800}?)['"]/g,
-
-    // Medium-confidence patterns
-    /['"]([\s\S]{30,600}?)['"]\s*[,\]\}]/g,
-
-    // Low-confidence but potentially useful
-    /"((?:[^"\\]|\\.){40,400})"/g,
-  ];
-
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(scriptContent)) !== null) {
-      const text = match[1];
-      if (text && isLikelyContent(text)) {
-        strings.push(text);
-      }
-    }
   }
 
-  return strings;
-}
-
-function isLikelyContent(text: string): boolean {
-  const decoded = text
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "\r")
-    .replace(/\\t/g, "\t")
-    .replace(/\\"/g, '"')
-    .replace(/\\'/g, "'")
-    .replace(/\\\\/g, "\\");
-
-  // More restrictive filtering
-  if (
-    // Technical patterns - more specific
-    decoded.match(
-      /^(https?:\/\/|\/static\/|\/api\/|function\s*\(|import\s+|export\s+|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|return\s+)/,
-    ) ||
-    decoded.match(
-      /\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|json|ico)(\?|$|#)/,
-    ) ||
-    decoded.match(/^[0-9a-f\-]{20,}$/i) ||
-    decoded.match(/^[A-Z_]{5,}$/) ||
-    // React/Next.js patterns - more specific
-    decoded.match(/^\$L\w+/) ||
-    decoded.match(
-      /^(onClick|onChange|onSubmit|className|style|ref|key|props)\s*=/,
-    ) ||
-    (decoded.match(/^[\[\{].*[\]\}]$/) && decoded.length > 50) ||
-    // CSS and styling - more specific
-    decoded.match(/^[\w\-]+(:\s*[\w\-#%]+;?\s*){2,}$/) ||
-    decoded.match(
-      /^(flex|grid|inline|block|absolute|relative|fixed|container|hidden)$/,
-    ) ||
-    // Length constraints
-    decoded.length < 15 ||
-    decoded.length > 1000
-  ) {
-    return false;
-  }
-
-  // Must contain letters
-  if (!decoded.match(/[\p{L}]/u)) return false;
-
-  // More lenient character ratio requirements
-  const letterCount = (decoded.match(/[\p{L}]/gu) || []).length;
-  const totalLength = decoded.length;
-  const spaceCount = (decoded.match(/\s/g) || []).length;
-
-  // At least 25% should be letters
-  if (letterCount / totalLength < 0.25) return false;
-
-  // Should have some spaces (indicates natural text)
-  if (spaceCount < letterCount * 0.1) return false;
-
-  // Should not be mostly punctuation or numbers
-  const punctuationCount = (decoded.match(/[^\p{L}\s]/gu) || []).length;
-  if (punctuationCount / totalLength > 0.6) return false;
-
-  return true;
-}
-
-function scoreContentQuality(text: string, url: string): number {
-  let score = 0;
-  const cleanText = enhanceTextContent(text);
-  const words = cleanText.split(/\s+/).filter((w) => w.length > 0);
-
-  // Length scoring (optimal range)
-  if (cleanText.length >= 50 && cleanText.length <= 1200) score += 0.2; // Increased upper limit
-  if (cleanText.length >= 100 && cleanText.length <= 800) score += 0.2;
-
-  // Word count scoring
-  if (words.length >= 5 && words.length <= 150) score += 0.3; // Increased upper limit
-  if (words.length >= 10 && words.length <= 80) score += 0.2;
-
-  // Sentence structure
-  const sentences = cleanText
-    .split(/[.!?؟।]/)
-    .filter((s) => s.trim().length > 10);
-  if (sentences.length >= 1) score += 0.2;
-  if (sentences.length >= 2) score += 0.2;
-
-  // Natural language indicators
-  const hasCommonWords = cleanText.match(
-    /\b(the|and|or|in|on|at|to|for|of|with|by|is|are|was|were|have|has|had|will|would|can|could|should|may|might|we|you|our|your|this|that|these|those|و|في|على|من|إلى|هذا|هذه|التي|الذي|أن|كان|يمكن|سوف|قد|لا|نعم)\b/gi,
-  );
-  if (hasCommonWords) score += 0.3;
-
-  // Business/content keywords - more comprehensive and less penalizing
-  const hasBusinessKeywords = cleanText.match(
-    /\b(service|customer|business|support|agent|AI|voice|chat|call|phone|website|platform|solution|help|answer|question|booking|appointment|price|pricing|plan|feature|automation|contact|about|privacy|terms|FAQ|blog|company|team|product|technology|innovation|digital|smart|intelligent|الذكي|الاصطناعي|خدمة|العملاء|الوكيل|المساعد|الأعمال|المنصة|الحل|السعر|الأسعار|الخطة|الميزة|الأتمتة|اتصال|حول|الخصوصية|الشروط|الأسئلة|مدونة|الشركة|الفريق|المنتج|التكنولوجيا|الابتكار|الرقمي|الذكي)\b/gi,
-  );
-  if (hasBusinessKeywords) {
-    const matches = cleanText.match(
-      /\b(service|customer|business|support|agent|AI|voice|chat|call|phone|website|platform|solution|help|answer|question|booking|appointment|price|pricing|plan|feature|automation|contact|about|privacy|terms|FAQ|blog|company|team|product|technology|innovation|digital|smart|intelligent|الذكي|الاصطناعي|خدمة|العملاء|الوكيل|المساعد|الأعمال|المنصة|الحل|السعر|الأسعار|الخطة|الميزة|الأتمتة|اتصال|حول|الخصوصية|الشروط|الأسئلة|مدونة|الشركة|الفريق|المنتج|التكنولوجيا|الابتكار|الرقمي|الذكي)\b/gi,
+  private isValidResult(
+    result: ExtractionResult | null,
+  ): result is ExtractionResult {
+    return !!(
+      result &&
+      result.content &&
+      result.wordCount >= this.config.minWordCount &&
+      result.content !== "No meaningful content found"
     );
-    score += Math.min(0.5, (matches?.length || 0) * 0.08); // Increased bonus
   }
 
-  // Reduce technical penalties - these might appear in legitimate content
-  const hasTechnicalWords = cleanText.match(
-    /\b(component|props|state|render|function|class|import|export|const|let|var|null|undefined|true|false|jsx|tsx)\b/gi,
-  );
-  if (hasTechnicalWords) {
-    const count = hasTechnicalWords.length;
-    // Only penalize if there are many technical terms relative to content length
-    if (count > words.length * 0.1) score -= 0.2; // Reduced penalty
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // Reduce CSS penalties - some styling terms might appear in content
-  const hasStylingWords = cleanText.match(
-    /\b(className|style|css|px|rem|em|flex|grid|hidden|block|inline|absolute|relative|fixed|hover|focus|dark|bg-|text-|w-|h-|p-|m-)\b/gi,
-  );
-  if (hasStylingWords) {
-    const count = hasStylingWords.length;
-    if (count > words.length * 0.05) score -= 0.1; // Reduced penalty
-  }
+  extractLinksFromHtml(html: string, baseUrl: string): string[] {
+    try {
+      const $ = load(html);
+      const origin = new URL(baseUrl).origin;
+      const links = new Set<string>();
 
-  // Be more specific about graphics content
-  const hasGraphicsContent =
-    cleanText.match(/\b(svg|viewBox|stroke|fill|lucide|icon)\b/gi) &&
-    cleanText.match(/M\d+[\d\s\.,\-LCZ]*\d+/); // Must have both keywords AND path data
-  if (hasGraphicsContent) score -= 0.2; // Reduced penalty
+      $("a[href]").each((_, el) => {
+        const href = $(el).attr("href");
+        if (!href) return;
 
-  // Bonus for proper punctuation
-  const hasPunctuation = cleanText.match(/[.!?؟،]/);
-  if (hasPunctuation) score += 0.1;
+        try {
+          const fullUrl = new URL(href, baseUrl).toString();
+          const parsedUrl = new URL(fullUrl);
 
-  // Bonus for Arabic content (domain-specific)
-  if (cleanText.match(/[\u0600-\u06FF]/)) score += 0.2;
+          if (parsedUrl.origin !== origin) return;
 
-  // Bonus for mixed language content
-  if (cleanText.match(/[a-zA-Z]/) && cleanText.match(/[\u0600-\u06FF]/))
-    score += 0.1;
+          if (
+            fullUrl.match(
+              /\.(jpg|jpeg|png|gif|svg|pdf|zip|mp4|mp3|css|js|woff|woff2|ico|xml|json)(\?|$)/i,
+            )
+          )
+            return;
 
-  // Less strict penalty for repetitive content
-  const uniqueWords = new Set(words.map((w) => w.toLowerCase()));
-  const uniqueRatio = uniqueWords.size / words.length;
-  if (uniqueRatio < 0.3) score -= 0.2; // Only penalize very repetitive content
+          if (
+            fullUrl.match(
+              /\/(login|register|logout|admin|api|cdn|assets|static|wp-admin|wp-content)\//i,
+            )
+          )
+            return;
 
-  // Bonus for reasonable content length
-  if (cleanText.length > 200 && cleanText.length < 2000) score += 0.1;
+          if (href.match(/^(mailto:|tel:|javascript:|#|ftp:|file:)/)) return;
 
-  // Bonus for having multiple sentences
-  if (sentences.length >= 3) score += 0.1;
+          if (parsedUrl.searchParams.toString().length > 200) return;
 
-  return Math.max(0, Math.min(1, score));
-}
+          const canonicalUrl = canonicalizeUrl(fullUrl);
+          links.add(canonicalUrl);
+        } catch {
+          // Invalid URL, skip
+        }
+      });
 
-function enhanceTextContent(text: string): string {
-  let enhanced = text
-    .replace(/\\n/g, " ")
-    .replace(/\\r/g, " ")
-    .replace(/\\t/g, " ")
-    .replace(/\\"/g, '"')
-    .replace(/\\'/g, "'")
-    .replace(/\\\\/g, "\\")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // Handle Arabic content improvements
-  if (enhanced.match(/[\u0600-\u06FF]/)) {
-    enhanced = enhanceArabicContent(enhanced);
-  }
-
-  return enhanced;
-}
-
-function enhanceArabicContent(text: string): string {
-  return (
-    text
-      // Fix Arabic text direction markers
-      .replace(/[\u200E\u200F\u202A-\u202E]/g, " ")
-      // Normalize Arabic numbers
-      .replace(/[٠-٩]/g, (match) =>
-        String.fromCharCode(match.charCodeAt(0) - 1584 + 48),
-      )
-      // Fix spacing around Arabic punctuation
-      .replace(/\s*([؟،؛])\s*/g, "$1 ")
-      // Clean up mixed RTL/LTR text
-      .replace(/([a-zA-Z])\s+([\u0600-\u06FF])/g, "$1 $2")
-      .replace(/([\u0600-\u06FF])\s+([a-zA-Z])/g, "$1 $2")
-      // Fix common Arabic text issues
-      .replace(/\s+/g, " ")
-      .trim()
-  );
-}
-
-function normalizeTextContent(text: string): string {
-  return text
-    .replace(/\s+/g, " ")
-    .replace(/([.!?؟])\s*([A-ZÀ-ÿ\u0600-\u06FF])/g, "$1\n\n$2") // Add paragraph breaks
-    .trim();
-}
-
-function extractTitleFromHTML(html: string): string {
-  const titlePatterns = [
-    /<title[^>]*>([^<]+)<\/title>/i,
-    /<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i,
-    /<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"/i,
-    /<meta[^>]*name="title"[^>]*content="([^"]+)"/i,
-    /<h1[^>]*>([^<]+)<\/h1>/i,
-  ];
-
-  for (const pattern of titlePatterns) {
-    const match = html.match(pattern);
-    if (match) {
-      let title = match[1].trim();
-      // Clean up common title patterns
-      title = title.replace(/\s*[|\-]\s*.*$/, "").trim();
-      if (title.length > 5 && title.length < 200) {
-        return enhanceTextContent(title);
-      }
+      return Array.from(links);
+    } catch (error) {
+      console.warn("Link extraction failed:", error);
+      return [];
     }
   }
 
-  return "";
-}
+  async cleanup(): Promise<void> {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+    }
+  }
 
-async function extractFromDOMEnhanced(
-  html: string,
-  url: string,
-): Promise<ExtractedContent | null> {
-  try {
-    const $ = cheerio.load(html);
+  // Enhanced RSC/Flight payload extractor
+  private extractFromNextFlight(html: string): string | null {
+    try {
+      const payloadPatterns = [
+        /self\.__next_f\.push\(\s*\[([\s\S]*?)\]\s*\)/g,
+        /\$\S+:"([^"]*(?:\\.[^\"]*)*)"/g,
+        /"children":\s*"([^"]*(?:\\.[^\"]*)*)"/g,
+      ];
 
-    // Remove noise elements more aggressively
-    $(
-      "script, style, nav, footer, header, aside, noscript, iframe, " +
-        ".nav, .navigation, .menu, .sidebar, .advertisement, .ads, .social, .share, " +
-        ".cookie, .popup, .modal, .overlay, .loader, .loading, .spinner, " +
-        '[class*="nav"], [class*="menu"], [class*="sidebar"], [class*="ad"], ' +
-        '[class*="social"], [class*="share"], [class*="cookie"], [class*="popup"], ' +
-        '[class*="loading"], [class*="spinner"], [data-testid*="loading"]',
-    ).remove();
+      const texts: string[] = [];
+      let totalPayloads = 0;
 
-    // Try to find main content areas
-    const contentSelectors = [
-      "main",
-      "article",
-      ".content",
-      ".main-content",
-      ".post-content",
-      ".entry-content",
-      ".page-content",
-      ".container main",
-      "#content",
-      "#main",
-      '[role="main"]',
-    ];
+      for (const pattern of payloadPatterns) {
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(html)) !== null) {
+          totalPayloads++;
+          let raw = match[1];
+          if (!raw) continue;
 
-    let bestContent = "";
-    let bestScore = 0;
-    let bestTitle = "";
+          raw = raw
+            .replace(/\\n/g, " ")
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, "\\")
+            .replace(/\\t/g, " ")
+            .replace(/\\r/g, "");
 
-    for (const selector of contentSelectors) {
-      const element = $(selector);
-      if (element.length > 0) {
-        const text = element.text().trim();
-        if (text.length > 50) {
-          const score = scoreContentQuality(text, url);
-          if (score > bestScore) {
-            bestContent = text;
-            bestScore = score;
-            // Try to find title within this content area
-            const titleElement = element.find("h1, h2, .title").first();
-            if (titleElement.length > 0) {
-              bestTitle = titleElement.text().trim();
-            }
+          if (raw.length < 10) continue;
+          if (this.isTechnicalNoise(raw)) continue;
+
+          if (this.isMeaningfulContent(raw)) {
+            texts.push(raw.trim());
           }
         }
       }
-    }
 
-    // Fallback to body content if no specific content area found
-    if (!bestContent || bestScore < 0.3) {
-      const bodyText = $("body").text().trim();
-      if (bodyText.length > 100) {
-        const bodyScore = scoreContentQuality(bodyText, url);
-        if (bodyScore > bestScore) {
-          bestContent = bodyText;
-          bestScore = bodyScore;
+      console.log(
+        `[flight] totalPayloads=${totalPayloads} extractedTexts=${texts.length}`,
+      );
+
+      if (texts.length === 0) return null;
+
+      let joined = texts.join(" ").replace(/\s+/g, " ").trim();
+      joined = this.cleanFlightContent(joined);
+
+      return joined.length > 50 ? joined : null;
+    } catch (err) {
+      console.warn("extractFromNextFlight failed:", err);
+      return null;
+    }
+  }
+
+  private isTechnicalNoise(text: string): boolean {
+    const noisePatterns = [
+      /^[\d\s\-_:,\[\]{}()]+$/,
+      /^[A-Z][a-zA-Z]*$/,
+      /static\/chunks/,
+      /webpack/i,
+      /\/_next\//,
+      /^[a-f0-9]{6,}$/,
+      /className|onClick|href|src/i,
+      /\$[A-Z]/,
+      /^I\[|^HL\[/,
+      /application\/vnd\.ant/,
+      /crossOrigin|type.*font/i,
+    ];
+
+    return noisePatterns.some((pattern) => pattern.test(text));
+  }
+
+  private isMeaningfulContent(text: string): boolean {
+    const hasArabic = /[\u0600-\u06FF]/.test(text);
+    const hasEnglish = /[a-zA-Z]/.test(text);
+
+    if (!hasArabic && !hasEnglish) return false;
+    if (text.length < 10 || text.length > 500) return false;
+
+    const words = text.split(/\s+/).filter((w) => w.length > 2);
+    if (words.length < 2) return false;
+
+    const meaningfulPatterns = [
+      /[.!?؟،]/,
+      /\b(the|and|or|in|on|at|to|for|of|with|by)\b/i,
+      /\b(في|من|إلى|على|مع|عن|هذا|هذه|التي|الذي)\b/,
+      /\b(price|service|contact|about|help|support|terms|privacy)/i,
+      /\b(سعر|خدمة|تواصل|حول|مساعدة|دعم|شروط|خصوصية)/,
+    ];
+
+    return meaningfulPatterns.some((pattern) => pattern.test(text));
+  }
+
+  private cleanFlightContent(content: string): string {
+    return content
+      .replace(/\$L\w+/g, "")
+      .replace(/static\/chunks\/[\w\-\.\/]+/g, "")
+      .replace(/\b[a-f0-9]{8,}\b/g, "")
+      .replace(/webpack\w*/gi, "")
+      .replace(/crossOrigin|font\/woff2?/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private detectRSC(html: string): boolean {
+    const rscIndicators = [
+      "self.__next_f.push",
+      '"$Sreact.fragment"',
+      "static/chunks/app/",
+      "parallelRouterKey",
+      /I\[\d+,\[/,
+      /\$S[a-z]/,
+      /"children":\s*"\$/,
+      /app\/layout-[a-f0-9]+\.js/,
+      /static\/chunks\/app\//,
+      /"type":\s*"font\/woff2?"/,
+    ];
+
+    const rscCount = rscIndicators.filter((indicator) =>
+      typeof indicator === "string"
+        ? html.includes(indicator)
+        : indicator.test(html),
+    ).length;
+
+    const hasMinimalHTML =
+      html.length > 10000 &&
+      !html.includes("<main") &&
+      !html.includes("<article") &&
+      html.includes("static/chunks/");
+
+    return rscCount >= 2 || hasMinimalHTML;
+  }
+
+  private async fetchHTMLWithRetry(
+    url: string,
+    userAgent: string,
+    extraHeaders: Record<string, string> = {},
+    maxRetries: number = 3,
+  ): Promise<string> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const html = await this.fetchHTML(url, userAgent, extraHeaders);
+
+        if (!this.detectRSC(html)) {
+          return html;
         }
+
+        if (attempt < maxRetries) {
+          console.log(
+            `Attempt ${attempt}: Got RSC payload, retrying in ${attempt * 1000}ms...`,
+          );
+          await this.delay(attempt * 1000);
+        }
+      } catch (error) {
+        if (attempt === maxRetries) throw error;
+        console.log(`Attempt ${attempt} failed: ${error}, retrying...`);
+        await this.delay(attempt * 500);
       }
     }
 
-    if (bestContent.length < 50) return null;
-
-    // Extract title if not found in content area
-    if (!bestTitle) {
-      bestTitle = extractTitleFromHTML(html);
-    }
-
-    const enhancedContent = enhanceTextContent(bestContent);
-    const wordCount = enhancedContent
-      .split(/\s+/)
-      .filter((w) => w.length > 0).length;
-
-    return {
-      title: bestTitle || "",
-      content: enhancedContent,
-      wordCount,
-    };
-  } catch (error) {
-    console.error("Error in enhanced DOM extraction:", error);
-    return null;
-  }
-}
-
-async function extractWithReadability(
-  html: string,
-  url: string,
-): Promise<ExtractedContent | null> {
-  try {
-    const dom = new JSDOM(html, { url });
-    const doc = dom.window.document;
-    const reader = new Readability(doc);
-    const article = reader.parse();
-
-    if (article?.textContent && article.textContent.trim().length > 100) {
-      const cleanContent = enhanceTextContent(article.textContent.trim());
-      const wordCount = cleanContent
-        .split(/\s+/)
-        .filter((w) => w.length > 0).length;
-
-      if (wordCount >= 20) {
-        return {
-          title: article.title?.trim() || "",
-          content: cleanContent,
-          wordCount,
-        };
-      }
-    }
-  } catch (error) {
-    console.warn("Readability failed for", url, ":", error);
-  }
-
-  return null;
-}
-
-function validateExtractedContent(content: ExtractedContent): boolean {
-  const { title, content: text, wordCount } = content;
-
-  // Minimum quality thresholds
-  if (wordCount < 15) return false;
-  if (text.length < 80) return false;
-
-  // More specific noise indicators - avoid false positives
-  const noiseIndicators = [
-    /M\d+\.\d+[LC]\d+/g, // SVG path commands (more specific)
-    /lucide lucide-\w+/g, // Specific icon classes
-    /className\s*=\s*["'][^"']*["']/g, // React className props (more specific)
-    /__NEXT_DATA__\s*=|self\.__next_f\s*\(/g, // Next.js internal (more specific)
-    /\b(onClick|onChange|onSubmit|onFocus|onBlur)\s*=\s*\{/g, // Event handlers (more specific)
-  ];
-
-  let noiseCount = 0;
-  noiseIndicators.forEach((regex) => {
-    const matches = text.match(regex);
-    if (matches) noiseCount += matches.length;
-  });
-
-  // More lenient noise ratio - 15% instead of 8%
-  const noiseRatio = noiseCount / wordCount;
-  if (noiseRatio > 0.15) {
-    console.warn(
-      `Content rejected: ${(noiseRatio * 100).toFixed(1)}% noise, ${noiseCount} noise indicators`,
-    );
-    return false;
-  }
-
-  // Ensure actual readable content exists
-  const readableText = text.replace(/[^\p{L}\s]/gu, " ").trim();
-  if (readableText.length < text.length * 0.5) {
-    // More lenient - 50% instead of 60%
-    console.warn("Content rejected: Less than 50% readable text");
-    return false;
-  }
-
-  // More lenient quality score threshold
-  const qualityScore = scoreContentQuality(text, "");
-  if (qualityScore < 0.2) {
-    // Reduced from 0.3
-    console.warn(
-      `Content rejected: Quality score ${qualityScore.toFixed(2)} too low`,
-    );
-    return false;
-  }
-
-  return true;
-}
-
-function logExtractionResults(url: string, result: ExtractedContent | null) {
-  if (!result) {
-    console.log(`EXTRACTION FAILED: ${url}`);
-    return;
-  }
-
-  const quality = scoreContentQuality(result.content, url);
-  const status = quality > 0.6 ? "HIGH" : quality > 0.3 ? "MED" : "LOW";
-
-  console.log(
-    `${status} QUALITY (${quality.toFixed(2)}): ${url}\n` +
-      `  ${result.wordCount} words, title: "${result.title.substring(0, 50)}${result.title.length > 50 ? "..." : ""}"\n` +
-      `  Preview: "${result.content.substring(0, 100)}${result.content.length > 100 ? "..." : ""}"`,
-  );
-}
-
-function debugContentExtraction(content: ExtractedContent, url: string): void {
-  const { title, content: text, wordCount } = content;
-  const qualityScore = scoreContentQuality(text, url);
-
-  console.log(`\nDEBUG: Content analysis for ${url}`);
-  console.log(`Title: "${title}"`);
-  console.log(`Word count: ${wordCount}`);
-  console.log(`Content length: ${text.length}`);
-  console.log(`Quality score: ${qualityScore.toFixed(3)}`);
-
-  // Check noise indicators
-  const noiseIndicators = [
-    /M\d+\.\d+[LC]\d+/g,
-    /lucide lucide-\w+/g,
-    /className\s*=\s*["'][^"']*["']/g,
-    /__NEXT_DATA__\s*=|self\.__next_f\s*\(/g,
-    /\b(onClick|onChange|onSubmit|onFocus|onBlur)\s*=\s*\{/g,
-  ];
-
-  let totalNoise = 0;
-  noiseIndicators.forEach((regex, i) => {
-    const matches = text.match(regex);
-    if (matches) {
-      console.log(`Noise indicator ${i}: ${matches.length} matches`);
-      totalNoise += matches.length;
-    }
-  });
-
-  console.log(`Total noise indicators: ${totalNoise}`);
-  console.log(`Noise ratio: ${((totalNoise / wordCount) * 100).toFixed(1)}%`);
-  console.log(`Content preview: "${text.substring(0, 200)}..."`);
-  console.log(
-    `Validation result: ${validateExtractedContent(content) ? "PASS" : "FAIL"}\n`,
-  );
-}
-
-async function enqueueChild(
-  url: string,
-  kbId: string,
-  userId: string,
-  depth: number,
-) {
-  try {
-    // Add small delay based on domain to spread load
-    const config = getDomainConfig(url);
-    const delayMs = Math.max(10, Math.floor(config.crawlDelay / 4));
-
-    // Convert to seconds (number) for QStash
-    const delaySeconds = Math.max(1, Math.floor(delayMs / 1000));
-
-    // Use numeric delay (seconds) to satisfy SDK types
-    const qRes = await qstash.publishJSON({
-      url: `${process.env.BASE_URL}/api/process-crawl`,
-      body: { kbId, webUrl: url, userId, depth },
-      delay: delaySeconds, // <-- number (seconds)
+    console.log(`Final attempt with cache-busting headers...`);
+    return this.fetchHTML(url, userAgent, {
+      ...extraHeaders,
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+      "X-Requested-With": "XMLHttpRequest",
     });
+  }
 
-    console.log(
-      `Enqueued child ${url} with delay ${delaySeconds}s, qstash:`,
-      qRes,
-    );
-  } catch (error) {
-    console.error("Failed to enqueue child URL", url, ":", error);
+  private async fetchHTMLWithEnhancedHeaders(
+    url: string,
+    attempt: number = 1,
+  ): Promise<string> {
+    const userAgents = [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    ];
+
+    const headers = {
+      "User-Agent": userAgents[attempt % userAgents.length],
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": url.includes("/ar/") ? "ar,en;q=0.9" : "en,ar;q=0.9",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1",
+      "Sec-Ch-Ua":
+        '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+      "Sec-Ch-Ua-Mobile": "?0",
+      "Sec-Ch-Ua-Platform": '"Windows"',
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+
+    try {
+      const response = await fetch(url, {
+        headers,
+        signal: controller.signal,
+        redirect: "follow",
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      return await response.text();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private isGoodExtraction(
+    result: ExtractionResult | null,
+    url: string,
+  ): boolean {
+    if (!result || !this.isValidResult(result)) return false;
+
+    const content = result.content.toLowerCase();
+
+    const technicalTerms = [
+      "component",
+      "props",
+      "children",
+      "classname",
+      "onclick",
+      "href",
+      "src",
+    ];
+    const technicalCount = technicalTerms.filter((term) =>
+      content.includes(term),
+    ).length;
+    const technicalRatio = technicalCount / result.wordCount;
+
+    if (technicalRatio > 0.1) return false;
+
+    if (
+      result.title.includes("Flight payload") ||
+      result.title.includes("Next.js")
+    )
+      return false;
+
+    return true;
   }
 }
 
+// Save document helper function
 async function saveDocumentIfNew(
   kbId: string,
   url: string,
@@ -1105,26 +1282,20 @@ async function saveDocumentIfNew(
   wordCount?: number,
 ) {
   try {
-    // Dedupe using sourceUrl
+    const canonicalUrl = canonicalizeUrl(url);
+
     const existing = await prisma.document.findFirst({
-      where: { kbId, sourceUrl: url },
-      select: { id: true, content: true, filename: true, metadata: true },
+      where: { kbId, sourceUrl: canonicalUrl },
+      select: { id: true, content: true, filename: true },
     });
 
     if (existing) {
-      // Update if current content is significantly better
-      const existingWordCount =
-        (existing.metadata as Record<string, number>)?.wordCount ||
-        (existing.content ? existing.content.split(/\s+/).length : 0);
+      const existingWordCount = existing.content
+        ? existing.content.split(/\s+/).length
+        : 0;
       const newWordCount = wordCount || content.split(/\s+/).length;
 
-      // Only update if new content is significantly better (50% more words or much better quality)
-      const shouldUpdate =
-        existingWordCount < newWordCount * 0.6 ||
-        !existing.content ||
-        existing.content.length < 100;
-
-      if (shouldUpdate) {
+      if (existingWordCount < newWordCount * 0.5) {
         await prisma.document.update({
           where: { id: existing.id },
           data: {
@@ -1132,49 +1303,37 @@ async function saveDocumentIfNew(
             filename: title || existing.filename || "Untitled",
             mimeType: "text/html",
             metadata: {
-              ...(existing.metadata as object),
               wordCount: newWordCount,
               updatedAt: new Date().toISOString(),
-              extractionMethod: "enhanced",
-              qualityScore: scoreContentQuality(content, url),
             },
           },
         });
-        console.log(
-          `Updated existing document: ${url} (${newWordCount} words)`,
-        );
-      } else {
-        console.log(`Skipped update for ${url}: existing content is adequate`);
+        console.log(`Updated existing document: ${canonicalUrl}`);
       }
       return existing;
     }
 
-    // Create new document
     try {
-      const qualityScore = scoreContentQuality(content, url);
       const doc = await prisma.document.create({
         data: {
           kbId,
-          sourceUrl: url,
+          sourceUrl: canonicalUrl,
           filename: title || "Untitled",
           content,
           mimeType: "text/html",
           metadata: {
             wordCount: wordCount || content.split(/\s+/).length,
             crawledAt: new Date().toISOString(),
-            extractionMethod: "enhanced",
-            qualityScore,
-            contentLength: content.length,
+            originalUrl: url !== canonicalUrl ? url : undefined,
           },
         },
       });
 
       console.log(
-        `Created new document: ${url} (${wordCount || "unknown"} words, quality: ${qualityScore.toFixed(2)})`,
+        `Created new document: ${canonicalUrl} (${wordCount || "unknown"} words)`,
       );
       return doc;
     } catch (err) {
-      // Handle unique constraint race condition
       if (
         (err as PrismaClientKnownRequestError)?.code === "P2002" ||
         (err as PrismaClientKnownRequestError)?.message?.includes(
@@ -1182,12 +1341,9 @@ async function saveDocumentIfNew(
         )
       ) {
         const doc = await prisma.document.findFirst({
-          where: { kbId, sourceUrl: url },
+          where: { kbId, sourceUrl: canonicalUrl },
         });
-        if (doc) {
-          console.log(`Document created by another process: ${url}`);
-          return doc;
-        }
+        if (doc) return doc;
       }
       throw err;
     }
@@ -1197,208 +1353,170 @@ async function saveDocumentIfNew(
   }
 }
 
-async function handler(req: Request) {
+// Next.js 15 App Router handler with QStash signature verification
+async function handler(req: Request): Promise<Response> {
   const payload = await req.json();
-  const { kbId, webUrl, userId, depth = 1 } = payload;
+  const { kbId, webUrl, userId, depth = 0 }: RequestBody = payload;
 
-  if (!kbId || !webUrl) {
-    return new Response(JSON.stringify({ error: "missing kbId or webUrl" }), {
-      status: 400,
-    });
+  if (!kbId || !webUrl || !userId) {
+    return new Response(
+      JSON.stringify({ success: false, error: "Missing required parameters" }),
+      { status: 400 },
+    );
   }
 
-  let origin: string;
+  const url = new URL(webUrl);
+  const isLikelyRSCSite =
+    url.hostname.includes("vercel.app") ||
+    url.hostname.includes(".cx") ||
+    url.hostname.includes("aoun.cx") ||
+    webUrl.includes("/_next/") ||
+    (await isKnownRSCSite(url.hostname));
+
+  const crawlerConfig = {
+    ...CRAWLER_CONFIG,
+    enablePuppeteer: isLikelyRSCSite,
+    maxRetries: isLikelyRSCSite ? 5 : 3,
+    timeout: isLikelyRSCSite ? 60000 : 30000,
+  };
+
+  const crawler = new EnhancedWebCrawler(crawlerConfig);
+
   try {
-    const url = new URL(webUrl);
-    origin = url.origin;
-  } catch {
-    return new Response(JSON.stringify({ error: "invalid URL" }), {
-      status: 400,
-    });
-  }
+    const extracted = await crawler.crawl(webUrl);
 
-  console.log(`Processing: ${webUrl} (depth: ${depth})`);
+    if (!extracted || !isValidExtraction(extracted, webUrl)) {
+      console.warn("No meaningful content extracted from:", webUrl);
 
-  try {
-    const config = getDomainConfig(webUrl);
+      if (isLikelyRSCSite && !crawlerConfig.enablePuppeteer) {
+        console.log("Retrying with Puppeteer for RSC site...");
+        const puppeteerCrawler = new EnhancedWebCrawler({
+          ...crawlerConfig,
+          enablePuppeteer: true,
+        });
 
-    // 1) Check robots.txt if configured to respect it
-    if (config.respectRobots) {
-      const robots = await fetchRobotsForOrigin(origin);
-      if (!robots.isAllowed(webUrl, config.userAgent)) {
-        console.warn("Blocked by robots.txt:", webUrl);
-        return new Response(
-          JSON.stringify({ blocked: true, reason: "robots.txt" }),
-          { status: 200 },
-        );
+        const retryResult = await puppeteerCrawler.crawl(webUrl);
+        if (retryResult && isValidExtraction(retryResult, webUrl)) {
+          return processSuccessfulExtraction(
+            retryResult,
+            kbId,
+            webUrl,
+            userId,
+            depth,
+          );
+        }
       }
 
-      // 2) Respect crawl-delay from robots.txt
-      const robotsCrawlDelay = robots.getCrawlDelay(config.userAgent) || 0;
-      const finalDelay = Math.max(config.crawlDelay, robotsCrawlDelay * 1000);
-      if (finalDelay > 0) {
-        await new Promise((r) => setTimeout(r, Math.min(finalDelay, 10000))); // Max 10s delay
-      }
-    }
-
-    // 3) Rate limiting - ensure polite crawling
-    const { limit, lastRequest } = getRateLimiter(origin);
-    const timeSinceLastRequest = Date.now() - lastRequest;
-    const minInterval = config.crawlDelay;
-
-    if (timeSinceLastRequest < minInterval) {
-      await new Promise((r) =>
-        setTimeout(r, minInterval - timeSinceLastRequest),
-      );
-    }
-
-    // 4) Fetch page with retries and rate limiting
-    let html: string;
-    try {
-      html = await limit(async () => {
-        const result = await fetchWithRetry(webUrl);
-        getRateLimiter(origin).lastRequest = Date.now();
-        return result;
-      });
-
-      console.log(`Successfully fetched ${webUrl} (${html.length} chars)`);
-    } catch (err) {
-      console.error("Fetch failed:", webUrl, err);
       return new Response(
         JSON.stringify({
           success: false,
-          error: "fetch_failed",
-          details: err instanceof Error ? err.message : "Unknown error",
+          error: "no_content",
+          details: "Insufficient content extracted",
+          extraction: extracted,
         }),
-        { status: 500 },
-      );
-    }
-
-    // 5) Extract main content with enhanced algorithms
-    const extracted = await extractMainContent(html, webUrl);
-    if (!extracted) {
-      console.warn("No meaningful content extracted from:", webUrl);
-      return new Response(
-        JSON.stringify({ success: false, error: "no_content" }),
         { status: 200 },
       );
     }
 
-    const { title, content, wordCount } = extracted;
-
-    // 6) Save to database
-    const savedDocument = await saveDocumentIfNew(
+    return await processSuccessfulExtraction(
+      extracted,
       kbId,
       webUrl,
-      title,
-      content,
-      wordCount,
-    );
-
-    // 7) Queue embedding processing for this document (use numeric delay and log response)
-    try {
-      if (savedDocument && savedDocument.id) {
-        const initialDelaySeconds = 2;
-
-        const qRes = await qstash.publishJSON({
-          url: `${process.env.BASE_URL}/api/process-embeddings`,
-          body: {
-            kbId,
-            documentId: savedDocument.id,
-            userId,
-            webUrl,
-          },
-          delay: initialDelaySeconds,
-        });
-
-        console.log(
-          `Published embedding job for document ${savedDocument.id} to QStash:`,
-          qRes,
-        );
-      }
-    } catch (err) {
-      console.error("Failed to publish embedding job to QStash:", err);
-    }
-
-    // 8) Extract same-domain links and enqueue children (if depth > 0)
-    let enqueuedCount = 0;
-    if (depth > 0) {
-      const links = extractLinksEnhanced(html, webUrl, origin)
-        .map(canonicalizeUrl)
-        .filter((link, index, arr) => arr.indexOf(link) === index); // Remove duplicates
-
-      console.log(`Found ${links.length} unique links on ${webUrl}`);
-
-      // Limit links per page based on domain config
-      const maxLinks = Math.min(links.length, config.maxDepth * 15);
-      const selectedLinks = links.slice(0, maxLinks);
-
-      // Batch DB check to avoid processing already crawled URLs
-      const existingDocs = await prisma.document.findMany({
-        where: { kbId, sourceUrl: { in: selectedLinks } },
-        select: { sourceUrl: true },
-      });
-      const existingSet = new Set(
-        existingDocs.map((d) => canonicalizeUrl(d.sourceUrl!)),
-      );
-
-      const toEnqueue = selectedLinks.filter((l) => !existingSet.has(l));
-
-      // Enqueue with controlled concurrency
-      const enqueueLimit = pLimit(3);
-      await Promise.all(
-        toEnqueue.map((link) =>
-          enqueueLimit(async () => {
-            try {
-              await enqueueChild(link, kbId, userId, depth - 1);
-            } catch (e) {
-              console.error("Failed to enqueue child", link, e);
-            }
-          }),
-        ),
-      );
-      enqueuedCount = toEnqueue.length;
-
-      console.log(
-        `Link processing: ${selectedLinks.length} selected, ${existingDocs.length} already exist, ${enqueuedCount} enqueued`,
-      );
-    }
-
-    const qualityScore = scoreContentQuality(content, webUrl);
-
-    console.log(
-      `Successfully processed ${webUrl}:\n` +
-        `  - Content: ${wordCount} words, ${content.length} chars\n` +
-        `  - Quality: ${qualityScore.toFixed(2)}\n` +
-        `  - Children: ${enqueuedCount} enqueued\n` +
-        `  - Title: "${title || "Untitled"}"`,
-    );
-
-    return new Response(
-      JSON.stringify({
-        success: true,
-        wordCount,
-        contentLength: content.length,
-        qualityScore: qualityScore,
-        enqueuedChildren: enqueuedCount,
-        title: title || "Untitled",
-        extractionMethod: "enhanced",
-      }),
-      { status: 200 },
+      userId,
+      depth,
     );
   } catch (error) {
-    console.error("Handler error for", webUrl, ":", error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+    console.error("Handler error:", errorMessage);
+
+    if (errorMessage.includes("RSC") || errorMessage.includes("payload")) {
+      await markAsRSCSite(url.hostname);
+    }
+
     return new Response(
       JSON.stringify({
         success: false,
         error: "internal_error",
-        details: error instanceof Error ? error.message : "Unknown error",
+        details: errorMessage,
       }),
-      {
-        status: 500,
-      },
+      { status: 500 },
     );
+  } finally {
+    await crawler.cleanup();
   }
 }
 
+function isValidExtraction(extracted: ExtractionResult, url: string): boolean {
+  if (!extracted || extracted.wordCount < 10) return false;
+
+  if (url.includes("/ar/")) {
+    const hasArabic = /[\u0600-\u06FF]/.test(extracted.content);
+    const hasReasonableContent = extracted.content.length > 50;
+    return hasArabic && hasReasonableContent;
+  }
+
+  return extracted.wordCount >= 15 && extracted.content.length > 100;
+}
+
+async function processSuccessfulExtraction(
+  extracted: ExtractionResult,
+  kbId: string,
+  webUrl: string,
+  userId: string,
+  depth: number,
+) {
+  const { title, content, wordCount, extractionMethod } = extracted;
+
+  const savedDocument = await saveDocumentIfNew(
+    kbId,
+    webUrl,
+    title,
+    content,
+    wordCount,
+  );
+
+  try {
+    if (savedDocument?.id) {
+      await qstash.publishJSON({
+        url: `${process.env.BASE_URL}/api/process-embeddings`,
+        body: { kbId, documentId: savedDocument.id, userId },
+        delay: 5,
+      });
+    }
+  } catch (error) {
+    console.error("Failed to queue embedding processing:", error);
+  }
+
+  console.log(
+    `Successfully processed ${webUrl} using ${extractionMethod}:\n  - Content: ${wordCount} words\n  - Title: "${title}"\n  - Method: ${extractionMethod}`,
+  );
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      document: {
+        id: savedDocument?.id,
+        url: webUrl,
+        title,
+        wordCount,
+        contentLength: content.length,
+        extractionMethod: extractionMethod || "unknown",
+      },
+      enqueuedChildren: 0,
+    }),
+    { status: 200 },
+  );
+}
+
+// Simple caching for known RSC sites (implement with your preferred storage)
+async function isKnownRSCSite(hostname: string): Promise<boolean> {
+  return ["aoun.cx", "www.aoun.cx"].includes(hostname);
+}
+
+async function markAsRSCSite(hostname: string): Promise<void> {
+  console.log(`Marking ${hostname} as RSC site`);
+}
+
+// Export with QStash signature verification for Next.js 15 App Router
 export const POST = verifySignatureAppRouter(handler);

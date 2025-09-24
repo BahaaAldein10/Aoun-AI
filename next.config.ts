@@ -6,10 +6,9 @@ const nextConfig: NextConfig = {
       {
         source: "/widget/frame",
         headers: [
-          // ❌ Do not set X-Frame-Options (invalid ALLOWALL)
           {
             key: "Content-Security-Policy",
-            value: "frame-ancestors * https://www.aoun.cx", // allow embedding everywhere
+            value: "frame-ancestors * https://www.aoun.cx",
           },
         ],
       },

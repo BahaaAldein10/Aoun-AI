@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate ; npx @puppeteer/browsers install chrome@stable"
   },
   "overrides": {
     "openai": {
@@ -53,6 +53,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "domhandler": "^5.0.3",
     "fast-xml-parser": "^5.2.5",
     "firebase": "^12.1.0",
     "firebase-admin": "^13.4.0",
@@ -65,10 +66,12 @@
     "mammoth": "^1.10.0",
     "next": "15.4.5",
     "next-auth": "^5.0.0-beta.29",
+    "node-fetch": "^3.3.2",
     "openai": "^5.16.0",
     "p-limit": "^7.1.1",
     "p-retry": "^7.0.0",
     "pdf-parse": "^1.1.1",
+    "puppeteer": "^24.22.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-hook-form": "^7.62.0",
@@ -88,7 +91,7 @@
     "@tailwindcss/typography": "^0.5.16",
     "@types/jsdom": "^21.1.7",
     "@types/lodash.isequal": "^4.5.8",
-    "@types/node": "^20",
+    "@types/node": "^20.19.17",
     "@types/node-fetch": "^2.6.13",
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19",
