@@ -21,13 +21,8 @@ async function sendWhatsAppMessage(
   phoneNumberId: string,
   to: string,
   message: string,
+  accessToken: string,
 ) {
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!accessToken) {
-    console.warn("WhatsApp access token not configured");
-    return false;
-  }
-
   try {
     const response = await fetch(
       `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`,
@@ -62,20 +57,15 @@ async function sendMessengerMessage(
   pageId: string,
   recipientId: string,
   message: string,
+  pageAccessToken: string,
 ) {
-  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-  if (!accessToken) {
-    console.warn("Facebook page access token not configured");
-    return false;
-  }
-
   try {
     const response = await fetch(
       `https://graph.facebook.com/${GRAPH_API_VERSION}/${pageId}/messages`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${pageAccessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -101,20 +91,15 @@ async function sendInstagramMessage(
   instagramAccountId: string,
   recipientId: string,
   message: string,
+  pageAccessToken: string,
 ) {
-  const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-  if (!accessToken) {
-    console.warn("Facebook page access token not configured");
-    return false;
-  }
-
   try {
     const response = await fetch(
       `https://graph.facebook.com/${GRAPH_API_VERSION}/${instagramAccountId}/messages`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${pageAccessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -223,8 +208,11 @@ async function generateAIResponse(
 
     const completion = await openai.chat.completions.create({
       model: OPENAI_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 200, // Keep responses concise for messaging
+      messages: [
+        { role: "system", content: systemInstruction + "\n\n" + retrievalText },
+        { role: "user", content: message.trim() },
+      ],
+      max_tokens: 200,
       temperature: 0.1,
     });
 
@@ -283,7 +271,10 @@ function verifySignature(
   body: Buffer,
   signatureHeader?: string | null,
 ): boolean {
-  if (!APP_SECRET) return true;
+  if (!APP_SECRET) {
+    console.error("APP_SECRET is required for webhook verification");
+    return false;
+  }
   if (!signatureHeader) {
     console.warn("Missing x-hub-signature-256 header");
     return false;
@@ -540,69 +531,110 @@ export async function POST(req: NextRequest) {
     const { phoneId, pageId, instagramId } = extractIdsFromPayload(payload);
     const messageDetails = extractMessageDetails(payload);
 
-    // Find integration and KB - Enhanced to properly map Facebook platforms
     const found = await (async () => {
       try {
+        // collect candidate providers to check depending on what IDs we received
+        const providersToCheck: string[] = [];
+        if (phoneId) providersToCheck.push("whatsapp");
+        if (pageId) providersToCheck.push("messenger");
+        if (instagramId) providersToCheck.push("instagram");
+
+        // If none of the platform-specific IDs exist, still query all three (defensive)
+        if (providersToCheck.length === 0) {
+          providersToCheck.push("whatsapp", "messenger", "instagram");
+        }
+
+        // fetch all enabled integrations for these providers (limit to reasonable number)
         const candidates = await prisma.integration.findMany({
           where: {
-            provider: {
-              in: ["whatsapp", "messenger", "instagram"],
-            },
+            provider: { in: providersToCheck },
             enabled: true,
           },
-          select: { id: true, userId: true, credentials: true, provider: true },
+          select: {
+            id: true,
+            userId: true,
+            credentials: true,
+            provider: true,
+          },
         });
 
+        // Helper to safely read common credential keys from the JSON blob
+        const credGet = (creds: any, keys: string[]) => {
+          for (const k of keys) {
+            if (
+              creds &&
+              typeof creds === "object" &&
+              (creds[k] || creds[k] === "")
+            ) {
+              // return as string or null if empty string
+              return creds[k] === "" ? null : String(creds[k]);
+            }
+          }
+          return null;
+        };
+
         for (const integ of candidates) {
-          const creds = integ.credentials as Record<string, unknown>;
-          if (!creds) continue;
+          const creds = integ.credentials as Record<string, any> | undefined;
 
-          // WhatsApp matching
-          if (
-            phoneId &&
-            (creds.phone_number_id === phoneId || creds.phoneNumber === phoneId)
-          ) {
-            return {
-              integrationId: integ.id,
-              userId: integ.userId,
-              provider: integ.provider,
-              channel: "whatsapp" as Channel,
-              platformId: phoneId,
-            };
+          // WhatsApp matching: check phone_number_id / phoneNumber / phone_number
+          if (phoneId && integ.provider === "whatsapp") {
+            const savedPhoneId = credGet(creds, [
+              "phone_number_id",
+              "phoneNumber",
+              "phone_number",
+              "phone",
+            ]);
+            if (savedPhoneId && savedPhoneId === String(phoneId)) {
+              return {
+                integrationId: integ.id,
+                userId: integ.userId,
+                provider: integ.provider,
+                channel: "whatsapp" as Channel,
+                platformId: phoneId,
+              };
+            }
           }
 
-          // Messenger matching - map to facebook channel
-          if (pageId && (creds.page_id === pageId || creds.pageId === pageId)) {
-            return {
-              integrationId: integ.id,
-              userId: integ.userId,
-              provider: integ.provider,
-              channel: "facebook" as Channel,
-              platformId: pageId,
-              subPlatform: "messenger",
-            };
+          // Messenger matching: check page_id / pageId
+          if (pageId && integ.provider === "messenger") {
+            const savedPageId = credGet(creds, ["page_id", "pageId", "page"]);
+            if (savedPageId && savedPageId === String(pageId)) {
+              return {
+                integrationId: integ.id,
+                userId: integ.userId,
+                provider: integ.provider,
+                channel: "facebook" as Channel,
+                platformId: pageId,
+                subPlatform: "messenger",
+              };
+            }
           }
 
-          // Instagram matching - map to facebook channel
-          if (
-            instagramId &&
-            (creds.instagram_business_account_id === instagramId ||
-              creds.instagramBusinessAccountId === instagramId)
-          ) {
-            return {
-              integrationId: integ.id,
-              userId: integ.userId,
-              provider: integ.provider,
-              channel: "facebook" as Channel,
-              platformId: instagramId,
-              subPlatform: "instagram",
-            };
+          // Instagram matching: instagram_business_account_id or instagramBusinessAccountId
+          if (instagramId && integ.provider === "instagram") {
+            const savedIgId = credGet(creds, [
+              "instagram_business_account_id",
+              "instagramBusinessAccountId",
+            ]);
+            if (savedIgId && savedIgId === String(instagramId)) {
+              return {
+                integrationId: integ.id,
+                userId: integ.userId,
+                provider: integ.provider,
+                channel: "facebook" as Channel,
+                platformId: instagramId,
+                subPlatform: "instagram",
+              };
+            }
           }
         }
+
+        // No exact match found. Don't return any default integration (avoids wrong writes).
+        return null;
       } catch (err) {
         console.warn("Error finding integration for message:", err);
+        return null;
       }
-      return null;
     })();
 
     let kbId: string | null = null;
@@ -628,93 +660,80 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Extract message text
-    let text = "";
-    const entries = Array.isArray(payload?.entry) ? payload.entry : [];
-    for (const entry of entries) {
-      const msgs =
-        entry?.changes?.[0]?.value?.messages ?? entry?.messages ?? [];
-      if (Array.isArray(msgs)) {
-        for (const m of msgs) {
-          if (m?.text?.body) text = text || m.text.body;
-          if (m?.message) text = text || m.message;
-          if (m?.type === "text" && m?.text) text = text || m.text;
-        }
-      }
-
-      // Messenger format
-      const messaging = entry?.messaging?.[0];
-      if (messaging?.message?.text) {
-        text = messaging.message.text;
-      }
-
-      // Instagram format
-      const changes = entry?.changes || [];
-      for (const change of changes) {
-        if (change?.field === "messages" && change?.value?.messages) {
-          const igMessages = change.value.messages;
-          for (const igMsg of igMessages) {
-            if (igMsg?.message?.text) {
-              text = igMsg.message.text;
-              break;
-            }
-          }
-        }
-      }
-    }
-
     // Generate AI response if we have a KB and message
-    if (kbId && botId && messageDetails && messageDetails.text.trim()) {
+    if (
+      kbId &&
+      botId &&
+      messageDetails &&
+      messageDetails.text.trim() &&
+      found
+    ) {
       try {
         const { response } = await generateAIResponse(
           kbId,
           messageDetails.text,
-          found!.userId,
+          found.userId,
           botId,
           channel,
         );
+
+        // Get the integration credentials for sending
+        const integ = await prisma.integration.findUnique({
+          where: { id: found.integrationId },
+          select: { credentials: true },
+        });
+        const creds = (integ?.credentials as Record<string, unknown>) || {};
 
         // Send response based on platform
         let messageSent = false;
 
         if (
-          found!.provider === "whatsapp" &&
+          found.provider === "whatsapp" &&
           phoneId &&
           messageDetails.senderId
         ) {
-          messageSent = await sendWhatsAppMessage(
-            phoneId,
-            messageDetails.senderId,
-            response,
-          );
+          const accessToken = creds.access_token as string;
+          if (accessToken) {
+            messageSent = await sendWhatsAppMessage(
+              phoneId,
+              messageDetails.senderId,
+              response,
+              accessToken,
+            );
+          }
         } else if (
-          (found!.provider === "messenger" ||
-            found!.subPlatform === "messenger") &&
+          found.provider === "messenger" &&
           pageId &&
           messageDetails.senderId
         ) {
-          messageSent = await sendMessengerMessage(
-            pageId,
-            messageDetails.senderId,
-            response,
-          );
+          const pageAccessToken = creds.page_access_token as string;
+          if (pageAccessToken) {
+            messageSent = await sendMessengerMessage(
+              pageId,
+              messageDetails.senderId,
+              response,
+              pageAccessToken,
+            );
+          }
         } else if (
-          (found!.provider === "instagram" ||
-            found!.subPlatform === "instagram") &&
+          found.provider === "instagram" &&
           instagramId &&
           messageDetails.senderId
         ) {
-          messageSent = await sendInstagramMessage(
-            instagramId,
-            messageDetails.senderId,
-            response,
-          );
+          const pageAccessToken = creds.page_access_token as string;
+          if (pageAccessToken) {
+            messageSent = await sendInstagramMessage(
+              instagramId,
+              messageDetails.senderId,
+              response,
+              pageAccessToken,
+            );
+          }
         }
 
         if (messageSent) {
-          const platformName = found!.subPlatform || found!.provider;
           console.log(
-            `Auto-reply sent via ${platformName} to ${messageDetails.senderId}`,
+            `Auto-reply sent via ${found.provider} to ${messageDetails.senderId}`,
           );
         }
       } catch (error) {
@@ -722,46 +741,43 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Persist lead (existing logic) - Enhanced with platform info
+    // Persist lead - FIXED to always create lead when we have a KB
     try {
-      if (kbId) {
-        const userId = (
-          await prisma.knowledgeBase.findUnique({
-            where: { id: kbId },
-            select: { userId: true },
-          })
-        )?.userId;
-
-        const leadSource = found?.subPlatform
-          ? `${found.subPlatform}_messaging_webhook`
-          : "messaging_webhook";
+      if (found && kbId && messageDetails) {
+        const leadSource = `${found.provider}_messaging_webhook`;
 
         await prisma.lead.create({
           data: {
-            userId: userId!,
+            userId: found.userId,
             name: "Inbound message",
             email: null,
-            phone: messageDetails?.senderId || undefined,
+            phone: messageDetails.senderId || undefined,
             status: "NEW",
             source: leadSource,
             capturedBy: kbId,
             meta: {
               payload,
-              text,
-              autoReplySent: !!messageDetails,
+              text: messageDetails.text,
+              autoReplySent: true,
               messageDetails,
-              platform: found?.subPlatform || found?.provider,
-              channel: found?.channel,
+              platform: found.provider,
+              channel: found.channel,
+              integrationId: found.integrationId,
             } as unknown as Prisma.InputJsonValue,
           },
         });
+
+        console.log(
+          `Lead created for ${found.provider} message from ${messageDetails.senderId}`,
+        );
       } else {
+        // Create audit log for unmapped webhooks
         await prisma.auditLog.create({
           data: {
             action: "messaging_webhook_unmapped",
             meta: {
-              integrationId: found?.integrationId,
-              userId: found?.userId,
+              integrationFound: !!found,
+              kbId,
               payloadSummary: {
                 entryCount: (payload?.entry || []).length,
                 phoneId,
@@ -770,9 +786,16 @@ export async function POST(req: NextRequest) {
                 hasMessage: !!messageDetails,
                 platform: messageDetails?.platform,
               },
+              reason: !found
+                ? "no_integration_found"
+                : !kbId
+                  ? "no_kb_linked"
+                  : "no_message_details",
             } as unknown as Prisma.InputJsonValue,
           },
         });
+
+        console.log("Webhook unmapped - created audit log");
       }
     } catch (dbErr) {
       console.warn("Failed to persist incoming message:", dbErr);
