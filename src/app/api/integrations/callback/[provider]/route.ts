@@ -293,7 +293,7 @@ const getPagesAndInstagram = async (accessToken: string) => {
     const pageAccessToken = firstPage.access_token ?? null;
 
     // Get instagram_business_account for the page
-    let instagramBusinessAccountId: string | null = null;
+    let instagramBusinessAccountId = null;
     if (pageId) {
       const pageInfoUrl = `https://graph.facebook.com/${graphVersion}/${pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(accessToken)}`;
       const pageInfo = await fetch(pageInfoUrl).then((r) => r.json());
@@ -343,8 +343,22 @@ export async function GET(
 
     if (provider === "facebook") {
       tokenRes = await handleFacebookTokenExchange(code);
-      const phoneNumberId = await getWhatsAppPhoneNumber(tokenRes.access_token);
-      const pagesInfo = await getPagesAndInstagram(tokenRes.access_token);
+
+      // Get platform-specific data based on channel
+      let phoneNumberId: string | null = null;
+      let pagesInfo = {
+        pageId: null,
+        pageAccessToken: null,
+        instagramBusinessAccountId: null,
+      };
+
+      if (channel === "whatsapp") {
+        phoneNumberId = await getWhatsAppPhoneNumber(tokenRes.access_token);
+      }
+
+      if (channel === "messenger" || channel === "instagram") {
+        pagesInfo = await getPagesAndInstagram(tokenRes.access_token);
+      }
 
       additionalCredentials = {
         channel,
