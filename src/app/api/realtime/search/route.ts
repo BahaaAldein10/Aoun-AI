@@ -7,8 +7,7 @@ import { upstashSearchSimilar } from "@/search/upstash-search";
 
 export const runtime = "nodejs";
 
-// Demo configuration
-const DEMO_KB_ID = process.env.DEMO_KB_ID!;
+const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
 const DEFAULT_TOP_K = 5;
 const MAX_TOP_K = 8;
 
@@ -100,11 +99,11 @@ export async function POST(req: Request) {
 
     const searchTopK = Math.max(1, Math.min(MAX_TOP_K, Number(topK)));
 
-    // Demo handling
-    if (isDemo || kbId === DEMO_KB_ID) {
+    const isDemoKb = DEMO_KB_ID !== null && kbId === DEMO_KB_ID;
+
+    if (isDemo || isDemoKb) {
       console.log("Performing demo KB search:", { query, topK: searchTopK });
 
-      // Use demo fallback content
       const demoResults = getDemoResults(query, searchTopK);
 
       const sources = demoResults.map((r, i) => {
@@ -126,7 +125,7 @@ export async function POST(req: Request) {
                 `SOURCE ${i + 1} (${s.label}, relevance: ${(s.similarity * 100).toFixed(1)}%):\n${s.text}`,
             )
             .join("\n\n---\n\n")
-        : "This is a demo environment. In the full version, you would have access to your custom knowledge base content.";
+        : "Demo fallback content.";
 
       return NextResponse.json({
         success: true,
@@ -136,8 +135,6 @@ export async function POST(req: Request) {
         contextText,
         totalResults: demoResults.length,
         isDemo: true,
-        message:
-          "Demo results - sign up for access to your custom knowledge base!",
       });
     }
 

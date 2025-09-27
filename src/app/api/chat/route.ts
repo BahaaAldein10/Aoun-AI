@@ -18,9 +18,7 @@ const MAX_PROMPT_TOKENS = Number(process.env.CHAT_MAX_CONTEXT_TOKENS ?? 3000);
 const JWT_SECRET = process.env.WIDGET_JWT_SECRET!;
 if (!JWT_SECRET) throw new Error("WIDGET_JWT_SECRET not defined");
 
-// Demo configuration
-const DEMO_KB_ID = process.env.DEMO_KB_ID!;
-const DEMO_RATE_LIMIT_PER_IP = 20; // Max demo messages per IP per day
+const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
 
 // ---------- Helpers ----------
 function sanitizeText(s: string) {
@@ -52,46 +50,8 @@ type ChatRequestBody = {
   history?: Array<{ role?: "user" | "assistant" | string; text?: string }>;
   userId?: string;
   topK?: number;
-  isDemo?: boolean; // Added for demo support
+  isDemo?: boolean;
 };
-
-// Demo utility functions
-function enhanceDemoResponse(
-  response: string,
-  usage: number,
-  limit: number,
-): string {
-  const remaining = limit - usage;
-
-  if (remaining <= 3 && remaining > 0) {
-    const conversionPrompt = `\n\n💡 ${remaining} demo messages remaining. Sign up for unlimited access!`;
-    return response + conversionPrompt;
-  } else if (remaining === 0) {
-    const conversionPrompt =
-      "\n\n🚀 Demo limit reached! Sign up now for unlimited conversations and access to all features.";
-    return response + conversionPrompt;
-  }
-
-  return response;
-}
-
-async function trackDemoUsage(
-  clientIP: string,
-  cache: any,
-): Promise<{ usage: number; allowed: boolean }> {
-  const today = new Date().toDateString();
-  const demoKey = `demo_usage:${clientIP}:${today}`;
-
-  const usage = (await cache.get(demoKey)) || 0;
-  const newUsage = usage + 1;
-
-  if (newUsage > DEMO_RATE_LIMIT_PER_IP) {
-    return { usage: newUsage, allowed: false };
-  }
-
-  await cache.set(demoKey, newUsage, 86400); // 24 hours TTL
-  return { usage: newUsage, allowed: true };
-}
 
 // ---------- POST ----------
 export async function POST(req: Request) {
@@ -141,39 +101,16 @@ export async function POST(req: Request) {
       );
     }
 
-    // Demo-specific handling
-    let demoUsageData: { usage: number; allowed: boolean } | null = null;
+    const isDemoKb = DEMO_KB_ID !== null && kbId === DEMO_KB_ID;
 
-    if (isDemo || kbId === DEMO_KB_ID) {
-      const clientIP =
-        req.headers.get("x-forwarded-for")?.split(",")[0] ||
-        req.headers.get("x-real-ip") ||
-        "unknown";
-
-      demoUsageData = await trackDemoUsage(clientIP, cache);
-
-      if (!demoUsageData.allowed) {
-        return NextResponse.json(
-          {
-            error: "Demo limit reached",
-            message:
-              "You've reached the daily demo limit. Please sign up for unlimited access.",
-            limit: DEMO_RATE_LIMIT_PER_IP,
-            usage: demoUsageData.usage,
-          },
-          { status: 429 },
-        );
-      }
-    }
-
-    // Widget JWT verification (skip for demo)
+    // Widget JWT verification (attempt if auth header present)
     const authHeader = (req.headers.get("authorization") || "").replace(
       /^Bearer\s+/,
       "",
     );
     let widgetPayload: { kbId?: string; origin?: string } | null = null;
 
-    if (authHeader && !isDemo && kbId !== DEMO_KB_ID) {
+    if (authHeader) {
       try {
         const secretKey = new TextEncoder().encode(JWT_SECRET);
         const { payload } = await jwtVerify(authHeader, secretKey);
@@ -183,48 +120,43 @@ export async function POST(req: Request) {
           origin: payload.origin as string | undefined,
         };
 
-        if (widgetPayload.kbId !== kbId) {
+        if (widgetPayload.kbId && widgetPayload.kbId !== kbId) {
           return NextResponse.json(
             { error: "KB ID mismatch in widget token" },
             { status: 403 },
           );
         }
       } catch {
+        // invalid token -> treat as absent, fallback to API-key flow (unless demo KB)
         widgetPayload = null;
       }
     }
 
-    // Rate limiting (use demo tracking or regular rate limiting)
-    let rateLimit;
-    if (isDemo || kbId === DEMO_KB_ID) {
-      // For demo, we use our custom tracking above
-      rateLimit = {
-        success: true,
-        remaining: Math.max(
-          0,
-          DEMO_RATE_LIMIT_PER_IP - (demoUsageData?.usage || 0),
-        ),
-        reset: new Date(Date.now() + 86400000), // 24 hours from now
-      };
+    // RATE LIMIT:
+    // - For legacy demo KB we skip server-side rate-limiting so the old widget continues to work.
+    // - For everything else we enforce the normal rate limiter.
+    let rateLimit: { success: boolean; remaining: number; reset?: Date };
+    if (isDemoKb) {
+      rateLimit = { success: true, remaining: Number.MAX_SAFE_INTEGER };
     } else {
       const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
-      rateLimit = await checkRateLimit(userIdentifier, "chat");
-
-      if (!rateLimit.success) {
+      const rl = await checkRateLimit(userIdentifier, "chat");
+      if (!rl.success) {
         return NextResponse.json(
           {
             error: "Rate limit exceeded",
-            limit: rateLimit.limit,
-            remaining: rateLimit.remaining,
-            reset: rateLimit.reset.toISOString(),
+            limit: rl.limit,
+            remaining: rl.remaining,
+            reset: rl.reset.toISOString(),
           },
           { status: 429 },
         );
       }
+      rateLimit = rl;
     }
 
     // Load KB
-    const targetKbId = isDemo || kbId === DEMO_KB_ID ? DEMO_KB_ID : kbId;
+    const targetKbId = kbId;
     const kb = await prisma.knowledgeBase.findUnique({
       where: { id: targetKbId },
       select: {
@@ -240,11 +172,7 @@ export async function POST(req: Request) {
 
     if (!kb) {
       return NextResponse.json(
-        {
-          error: isDemo
-            ? "Demo service unavailable"
-            : "Knowledge base not found",
-        },
+        { error: "Knowledge base not found" },
         { status: 404 },
       );
     }
@@ -259,8 +187,8 @@ export async function POST(req: Request) {
 
     const metadata = kbData.metadata ?? {};
 
-    // Widget origin check (skip for demo)
-    if (widgetPayload && !isDemo) {
+    // Widget origin check: only enforced for non-demo KBs when widget token present
+    if (!isDemoKb && widgetPayload) {
       const allowedOrigins = Array.isArray(metadata.allowedOrigins)
         ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
         : [];
@@ -280,8 +208,10 @@ export async function POST(req: Request) {
       }
     }
 
-    // API key protection (skip for demo)
-    if (!widgetPayload && !isDemo && kbId !== DEMO_KB_ID) {
+    // API key protection:
+    // - If request targets legacy demo KB, allow missing API key (legacy widget)
+    // - Otherwise require either a valid widget token OR a matching API key hash
+    if (!isDemoKb && !widgetPayload) {
       const storedHashHex =
         typeof metadata.apiKeyHash === "string"
           ? metadata.apiKeyHash
@@ -325,7 +255,6 @@ export async function POST(req: Request) {
 
     // Check chat cache for exact message
     const messageHash = createHash(message);
-    const cacheKey = `${targetKbId}:${messageHash}`;
     const cachedResponse = await cache.getChatResponse(targetKbId, messageHash);
 
     if (cachedResponse) {
@@ -344,17 +273,7 @@ export async function POST(req: Request) {
         !isFallback;
       const isNegative = !isCorrect;
 
-      // Enhanced response for demo
-      let responseText = cachedResponse.text;
-      if (isDemo || kbId === DEMO_KB_ID) {
-        responseText = enhanceDemoResponse(
-          responseText,
-          demoUsageData?.usage || 0,
-          DEMO_RATE_LIMIT_PER_IP,
-        );
-      }
-
-      // Log interaction for non-demo or demo analytics
+      // Log interaction (use demo-user for legacy demo KB)
       try {
         await logInteraction({
           userId: kbData.userId,
@@ -368,20 +287,20 @@ export async function POST(req: Request) {
           eventId,
           meta: {
             requestPath,
-            userIdentifier: isDemo
+            userIdentifier: isDemoKb
               ? "demo-user"
               : getUserIdentifier(req, widgetPayload),
             promptSize: message.length,
             retrievedCount: cachedResponse.sources?.length ?? 0,
             cached: true,
-            isDemo: isDemo || kbId === DEMO_KB_ID,
+            isDemo: isDemoKb || isDemo,
           },
         });
       } catch (err) {
         console.warn("logInteraction failed (cached path):", err);
       }
 
-      // Upsert usage row
+      // Upsert usage row (still record usage so analytics remain useful)
       try {
         await prisma.usage.upsert({
           where: { eventId },
@@ -399,10 +318,10 @@ export async function POST(req: Request) {
               promptSize: message.length,
               retrievedCount: cachedResponse.sources?.length ?? 0,
               requestPath,
-              userIdentifier: isDemo
+              userIdentifier: isDemoKb
                 ? "demo-user"
                 : getUserIdentifier(req, widgetPayload),
-              isDemo: isDemo || kbId === DEMO_KB_ID,
+              isDemo: isDemoKb || isDemo,
               createdAt: new Date().toISOString(),
             },
           },
@@ -416,10 +335,10 @@ export async function POST(req: Request) {
                 promptSize: message.length,
                 retrievedCount: cachedResponse.sources?.length ?? 0,
                 requestPath,
-                userIdentifier: isDemo
+                userIdentifier: isDemoKb
                   ? "demo-user"
                   : getUserIdentifier(req, widgetPayload),
-                isDemo: isDemo || kbId === DEMO_KB_ID,
+                isDemo: isDemoKb || isDemo,
                 lastSeenAt: new Date().toISOString(),
               },
             },
@@ -431,14 +350,12 @@ export async function POST(req: Request) {
 
       return NextResponse.json({
         success: true,
-        text: responseText,
+        text: cachedResponse.text,
         conversationId: conversationId ?? null,
         sources: cachedResponse.sources,
         rateLimit: { remaining: rateLimit.remaining },
         cached: true,
-        isDemo: isDemo || kbId === DEMO_KB_ID,
-        demoUsage: isDemo ? demoUsageData?.usage : undefined,
-        demoLimit: isDemo ? DEMO_RATE_LIMIT_PER_IP : undefined,
+        isDemo: isDemoKb || isDemo,
       });
     }
 
@@ -501,14 +418,8 @@ export async function POST(req: Request) {
       return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // Build prompt with demo-specific personality
-    const demoPersonality =
-      isDemo || kbId === DEMO_KB_ID
-        ? "You are a helpful and enthusiastic AI assistant showcasing our platform's capabilities. Be conversational, informative, and occasionally mention the benefits of signing up for the full service. Keep responses concise but informative."
-        : "";
-
-    const personality =
-      demoPersonality || (metadata?.personality as string) || "";
+    // Build prompt (use KB/personality if present)
+    const personality = (metadata?.personality as string) || "";
     const systemInstruction =
       `You are an assistant answering user questions using the provided sources. ${personality}`.trim();
 
@@ -551,7 +462,7 @@ export async function POST(req: Request) {
         const resp: any = await openai.responses.create({
           model: OPENAI_MODEL,
           input: prompt,
-          max_output_tokens: isDemo ? 400 : 800, // Shorter responses for demo
+          max_output_tokens: 800,
           temperature: 0.1,
         });
         llmMs = Date.now() - llmStart;
@@ -581,15 +492,6 @@ export async function POST(req: Request) {
           { status: 500 },
         );
       }
-    }
-
-    // Enhanced response for demo
-    if (isDemo || kbId === DEMO_KB_ID) {
-      assistantText = enhanceDemoResponse(
-        assistantText || "",
-        demoUsageData?.usage || 0,
-        DEMO_RATE_LIMIT_PER_IP,
-      );
     }
 
     // Prepare responseData and cache full response
@@ -630,12 +532,12 @@ export async function POST(req: Request) {
         meta: {
           responseTimeMs: llmMs,
           requestPath,
-          userIdentifier: isDemo
+          userIdentifier: isDemoKb
             ? "demo-user"
             : getUserIdentifier(req, widgetPayload),
           promptSize: prompt.length,
           retrievedCount: retrieved.length,
-          isDemo: isDemo || kbId === DEMO_KB_ID,
+          isDemo: isDemoKb || isDemo,
         },
       });
     } catch (err) {
@@ -661,10 +563,10 @@ export async function POST(req: Request) {
             retrievedCount: retrieved.length,
             responseTimeMs: llmMs,
             requestPath,
-            userIdentifier: isDemo
+            userIdentifier: isDemoKb
               ? "demo-user"
               : getUserIdentifier(req, widgetPayload),
-            isDemo: isDemo || kbId === DEMO_KB_ID,
+            isDemo: isDemoKb || isDemo,
             createdAt: new Date().toISOString(),
           },
         },
@@ -679,10 +581,10 @@ export async function POST(req: Request) {
               retrievedCount: retrieved.length,
               responseTimeMs: llmMs,
               requestPath,
-              userIdentifier: isDemo
+              userIdentifier: isDemoKb
                 ? "demo-user"
                 : getUserIdentifier(req, widgetPayload),
-              isDemo: isDemo || kbId === DEMO_KB_ID,
+              isDemo: isDemoKb || isDemo,
               lastSeenAt: new Date().toISOString(),
             },
           },
@@ -708,9 +610,7 @@ export async function POST(req: Request) {
       sources: responseData.sources,
       rateLimit: { remaining: rateLimit.remaining },
       cached: false,
-      isDemo: isDemo || kbId === DEMO_KB_ID,
-      demoUsage: isDemo ? demoUsageData?.usage : undefined,
-      demoLimit: isDemo ? DEMO_RATE_LIMIT_PER_IP : undefined,
+      isDemo: isDemoKb || isDemo,
     });
   } catch (err) {
     console.error("Chat handler error:", err);

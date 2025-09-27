@@ -20,11 +20,9 @@ import {
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Spinner from "./Spinner";
 
-// Demo configuration
 const DEMO_KB_ID = process.env.NEXT_PUBLIC_DEMO_KB_ID;
-const MAX_DEMO_MESSAGES = 10; // Limit demo interactions
-const DEMO_VOICE_NAME = "alloy";
-const DEMO_LANG = "en";
+const VOICE_NAME = "alloy";
+const DEFAULT_LANG = "en";
 
 type Msg = {
   id: string;
@@ -38,7 +36,6 @@ type Msg = {
 
 interface VoiceChatWidgetProps {
   lang?: SupportedLang;
-  onLimitReached?: () => void;
   onClose?: () => void;
   className?: string;
   initialMode?: "text" | "voice";
@@ -46,7 +43,6 @@ interface VoiceChatWidgetProps {
 
 export default function VoiceChatWidget({
   lang = "en",
-  onLimitReached,
   onClose,
   className,
   initialMode = "text",
@@ -65,14 +61,9 @@ export default function VoiceChatWidget({
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
 
-  // Mode state (now fixed based on initialMode)
   const [mode] = useState<"text" | "voice">(initialMode);
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
-
-  // Demo limitations
-  const [messageCount, setMessageCount] = useState(0);
-  const [isDemo] = useState(true);
 
   // Refs
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -104,8 +95,8 @@ export default function VoiceChatWidget({
             ? "Hi! I'm ready for voice conversation. Click the phone icon to start speaking with me!"
             : "مرحبا! أنا جاهز للمحادثة الصوتية. انقر على أيقونة الهاتف لبدء التحدث معي!"
           : lang === "en"
-            ? "Hi! I'm a demo assistant. Try asking me about our platform or services. You have limited interactions in this demo."
-            : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا. لديك تفاعلات محدودة في هذا العرض التوضيحي.",
+            ? "Hi! I'm an assistant — ask me anything about the platform or services."
+            : "مرحبا! أنا مساعد — اسألني عن المنصة أو الخدمات.",
       createdAt: new Date().toISOString(),
     };
     setMessages([welcomeMsg]);
@@ -184,35 +175,13 @@ export default function VoiceChatWidget({
     );
   }, []);
 
-  // Check demo limits
-  const checkDemoLimits = () => {
-    if (messageCount >= MAX_DEMO_MESSAGES) {
-      const limitMsg: Msg = {
-        id: `limit-${Date.now()}`,
-        role: "bot",
-        text:
-          lang === "en"
-            ? "You've reached the demo limit. Sign up to continue using the full service!"
-            : "لقد وصلت إلى حد العرض التوضيحي. اشترك للمتابعة باستخدام الخدمة الكاملة!",
-        createdAt: new Date().toISOString(),
-      };
-      pushMessage(limitMsg);
-      onLimitReached?.();
-      return false;
-    }
-    return true;
-  };
-
   // Send text message
   const sendTextMessage = async () => {
     const message = textInput.trim();
     if (!message) return;
 
-    if (!checkDemoLimits()) return;
-
     setTextInput("");
     setIsTyping(true);
-    setMessageCount((prev) => prev + 1);
 
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
@@ -228,7 +197,6 @@ export default function VoiceChatWidget({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // No authorization header for demo
         },
         body: JSON.stringify({
           kbId: DEMO_KB_ID,
@@ -266,7 +234,7 @@ export default function VoiceChatWidget({
       };
       pushMessage(botMsg);
 
-      // Always generate TTS for text messages
+      // Generate TTS for text messages
       generateTTS(reply, botMsg.id);
     } catch (error) {
       console.error("Text chat error:", error);
@@ -275,8 +243,8 @@ export default function VoiceChatWidget({
         role: "bot",
         text:
           lang === "en"
-            ? "Sorry, I encountered an error. This might be due to demo limitations."
-            : "عذراً، واجهت خطأ. قد يكون هذا بسبب قيود العرض التوضيحي.",
+            ? "Sorry, I encountered an error."
+            : "عذراً، واجهت خطأ.",
         createdAt: new Date().toISOString(),
         isVoice: false,
       };
@@ -295,7 +263,7 @@ export default function VoiceChatWidget({
         },
         body: JSON.stringify({
           text,
-          voice: DEMO_VOICE_NAME,
+          voice: VOICE_NAME,
           speed: 1.0,
           kbId: DEMO_KB_ID,
           isDemo: true,
@@ -364,13 +332,12 @@ export default function VoiceChatWidget({
             ? "Hi! I'm ready for voice conversation. Click the phone icon to start speaking with me!"
             : "مرحبا! أنا جاهز للمحادثة الصوتية. انقر على أيقونة الهاتف لبدء التحدث معي!"
           : lang === "en"
-            ? "Hi! I'm a demo assistant. Try asking me about our platform or services."
-            : "مرحبا! أنا مساعد تجريبي. جرب سؤالي عن منصتنا أو خدماتنا.",
+            ? "Hi! I'm an assistant — ask me anything about the platform or services."
+            : "مرحبا! أنا مساعد — اسألني عن المنصة أو الخدمات.",
       createdAt: new Date().toISOString(),
     };
     setMessages([welcomeMsg]);
     setConversationId(null);
-    setMessageCount(0);
   };
 
   const formatTime = (seconds: number) => {
@@ -387,7 +354,6 @@ export default function VoiceChatWidget({
   };
 
   const pending = isTyping || voicePending;
-  const limitReached = messageCount >= MAX_DEMO_MESSAGES;
 
   // WebRTC functions
   const fetchEphemeralSession = async () => {
@@ -396,8 +362,8 @@ export default function VoiceChatWidget({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         kbId: DEMO_KB_ID,
-        voice: DEMO_VOICE_NAME,
-        lang: DEMO_LANG,
+        voice: VOICE_NAME,
+        lang: DEFAULT_LANG,
         isDemo: true,
       }),
     });
@@ -564,7 +530,7 @@ export default function VoiceChatWidget({
           JSON.stringify({
             type: "session.update",
             session: {
-              instructions: `You are a helpful AI assistant with access to a knowledge base about our platform. When users ask questions, use the search_knowledge_base function to find relevant information before responding. Always ground your answers in the retrieved information and be conversational and natural. This is a demo session with limited interactions.`,
+              instructions: `You are a helpful AI assistant with access to a knowledge base about our platform. When users ask questions, use the search_knowledge_base function to find relevant information before responding. Always ground your answers in the retrieved information and be conversational and natural.`,
               turn_detection: {
                 type: "server_vad",
                 threshold: 0.5,
@@ -621,8 +587,6 @@ export default function VoiceChatWidget({
             ) {
               const userText = payload.item?.content?.[0]?.text;
               if (userText) {
-                if (!checkDemoLimits()) return;
-                setMessageCount((prev) => prev + 1);
                 pushMessage({
                   id: `user-${Date.now()}`,
                   role: "user",
@@ -750,21 +714,6 @@ export default function VoiceChatWidget({
   };
 
   const initiateCall = async () => {
-    if (limitReached) {
-      const limitMsg: Msg = {
-        id: `limit-${Date.now()}`,
-        role: "bot",
-        text:
-          lang === "en"
-            ? "Demo limit reached. Please sign up for unlimited voice conversations!"
-            : "تم الوصول إلى حد العرض التوضيحي. يرجى التسجيل للحصول على محادثات صوتية غير محدودة!",
-        createdAt: new Date().toISOString(),
-      };
-      pushMessage(limitMsg);
-      onLimitReached?.();
-      return;
-    }
-
     if (pcRef.current) {
       console.warn("Call already running");
       return;
@@ -773,7 +722,6 @@ export default function VoiceChatWidget({
     try {
       setVoicePending(true);
 
-      console.log("Creating ephemeral session...");
       const session = await fetchEphemeralSession();
       const ephemeralToken =
         session?.client_secret?.value ?? session?.client_secret;
@@ -840,7 +788,7 @@ export default function VoiceChatWidget({
       const modelName = session.model || "gpt-4o-mini-realtime";
       const realtimeUrl = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(modelName)}`;
 
-      console.log("Sending offer to OpenAI Realtime API...");
+      console.log("Sending offer to Realtime API...");
       const resp = await fetch(realtimeUrl, {
         method: "POST",
         headers: {
@@ -872,8 +820,8 @@ export default function VoiceChatWidget({
         role: "bot",
         text:
           lang === "en"
-            ? "Demo voice session started. You can speak now!"
-            : "تم بدء جلسة العرض التوضيحي الصوتية. يمكنك التحدث الآن!",
+            ? "Voice session started. You can speak now!"
+            : "تم بدء الجلسة الصوتية. يمكنك التحدث الآن!",
         createdAt: new Date().toISOString(),
         isVoice: true,
       });
@@ -1031,7 +979,6 @@ export default function VoiceChatWidget({
                       You must be 18+ or have guardian permission to use voice
                       features
                     </li>
-                    <li>This is a demo version with limited interactions</li>
                   </ul>
                   <p className="text-xs text-gray-500">
                     By clicking &quot;I Agree&quot;, you consent to these terms
@@ -1056,7 +1003,6 @@ export default function VoiceChatWidget({
                       يجب أن تكون 18+ أو لديك إذن من الوصي لاستخدام الميزات
                       الصوتية
                     </li>
-                    <li>هذه نسخة تجريبية مع تفاعلات محدودة</li>
                   </ul>
                   <p className="text-xs text-gray-500">
                     بالنقر على &quot;أوافق&quot;، فإنك توافق على هذه الشروط
@@ -1110,11 +1056,11 @@ export default function VoiceChatWidget({
             <h3 className="text-sm font-semibold">
               {mode === "voice"
                 ? lang === "en"
-                  ? "Voice Assistant (Demo)"
-                  : "المساعد الصوتي (تجريبي)"
+                  ? "Voice Assistant"
+                  : "المساعد الصوتي"
                 : lang === "en"
-                  ? "Chat Assistant (Demo)"
-                  : "مساعد الدردشة (تجريبي)"}
+                  ? "Chat Assistant"
+                  : "مساعد الدردشة"}
             </h3>
             <p className="text-muted-foreground text-xs">
               {isInCall
@@ -1126,8 +1072,8 @@ export default function VoiceChatWidget({
                     ? "Processing..."
                     : "جاري المعالجة..."
                   : lang === "en"
-                    ? `${messageCount}/${MAX_DEMO_MESSAGES} demo messages`
-                    : `${messageCount}/${MAX_DEMO_MESSAGES} رسائل تجريبية`}
+                    ? "Ready"
+                    : "جاهز"}
             </p>
           </div>
         </div>
@@ -1182,8 +1128,8 @@ export default function VoiceChatWidget({
               </p>
               <p className="text-muted-foreground mt-1 text-xs">
                 {lang === "en"
-                  ? `Demo mode: ${MAX_DEMO_MESSAGES - messageCount} interactions remaining`
-                  : `الوضع التجريبي: ${MAX_DEMO_MESSAGES - messageCount} تفاعلات متبقية`}
+                  ? "Start a conversation to get help or information"
+                  : "ابدأ محادثة للحصول على مساعدة أو معلومات"}
               </p>
             </div>
 
@@ -1257,7 +1203,6 @@ export default function VoiceChatWidget({
                             ? stopAudio()
                             : playAudio(msg.id, msg.audioUrl!)
                         }
-                        disabled={limitReached}
                         className={cn(
                           "h-6 px-2 text-xs",
                           msg.role === "user"
@@ -1320,19 +1265,6 @@ export default function VoiceChatWidget({
 
       {/* Input Controls */}
       <div className="border-t bg-white p-4 dark:bg-gray-950">
-        {limitReached && (
-          <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-800 dark:bg-orange-900/20">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-orange-600" />
-              <p className="text-sm text-orange-700 dark:text-orange-400">
-                {lang === "en"
-                  ? "Demo limit reached. Sign up for unlimited conversations!"
-                  : "تم الوصول إلى حد العرض التوضيحي. اشترك للحصول على محادثات غير محدودة!"}
-              </p>
-            </div>
-          </div>
-        )}
-
         {mode === "text" ? (
           <div className="flex items-center gap-2">
             <div className="flex-1">
@@ -1343,20 +1275,16 @@ export default function VoiceChatWidget({
                 onKeyDown={handleKeyDown}
                 placeholder={
                   lang === "en"
-                    ? limitReached
-                      ? "Demo limit reached..."
-                      : "Ask about our platform..."
-                    : limitReached
-                      ? "تم الوصول إلى حد العرض التوضيحي..."
-                      : "اسأل عن منصتنا..."
+                    ? "Ask about our platform..."
+                    : "اسأل عن منصتنا..."
                 }
-                disabled={pendingStatus || limitReached}
+                disabled={pendingStatus}
                 className="focus-visible:ring-blue-500/50"
               />
             </div>
             <Button
               onClick={sendTextMessage}
-              disabled={!textInput.trim() || pendingStatus || limitReached}
+              disabled={!textInput.trim() || pendingStatus}
               className="bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700"
             >
               {pendingStatus ? <Spinner /> : <Send className="h-4 w-4" />}
@@ -1381,9 +1309,7 @@ export default function VoiceChatWidget({
               {!isInCall ? (
                 <Button
                   onClick={startCall}
-                  disabled={
-                    voicePending || permission === false || limitReached
-                  }
+                  disabled={voicePending || permission === false}
                   className={cn(
                     "h-16 w-16 rounded-full p-0 transition-all duration-200",
                     "shadow-lg hover:scale-105 hover:shadow-xl",
@@ -1417,13 +1343,9 @@ export default function VoiceChatWidget({
                   ? lang === "en"
                     ? "Speak naturally — the assistant will reply automatically"
                     : "تحدث بطبيعية — سيقوم المساعد بالرد تلقائيًا"
-                  : limitReached
-                    ? lang === "en"
-                      ? "Demo limit reached - sign up for more!"
-                      : "تم الوصول إلى حد العرض التوضيحي - اشترك للمزيد!"
-                    : lang === "en"
-                      ? "Tap to start a real-time voice conversation"
-                      : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
+                  : lang === "en"
+                    ? "Tap to start a real-time voice conversation"
+                    : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
               </p>
             </div>
           </>

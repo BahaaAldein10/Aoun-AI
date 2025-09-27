@@ -14,16 +14,14 @@ import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
 
-// Demo configuration
-const DEMO_KB_ID = process.env.DEMO_KB_ID!;
-const DEMO_TTS_LIMIT_PER_IP = 10; // Max TTS requests per IP per day for demo
+const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
+
+const VALID_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 
 /** helper to create sha256 buffer (timing-safe compare) */
 function sha256Buffer(input: string) {
   return crypto.createHash("sha256").update(input, "utf8").digest();
 }
-
-const VALID_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
 
 /** estimate minutes from text (used for billing/analytics) */
 function estimateMinutesFromText(text?: string | null, wpm = 150) {
@@ -31,25 +29,6 @@ function estimateMinutesFromText(text?: string | null, wpm = 150) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   if (words === 0) return 0;
   return Math.max(1, Math.ceil(words / wpm));
-}
-
-/** Track demo TTS usage */
-async function trackDemoTTSUsage(
-  clientIP: string,
-  cache: any,
-): Promise<{ usage: number; allowed: boolean }> {
-  const today = new Date().toDateString();
-  const demoTtsKey = `demo_tts:${clientIP}:${today}`;
-
-  const usage = (await cache.get(demoTtsKey)) || 0;
-  const newUsage = usage + 1;
-
-  if (newUsage > DEMO_TTS_LIMIT_PER_IP) {
-    return { usage: newUsage, allowed: false };
-  }
-
-  await cache.set(demoTtsKey, newUsage, 86400); // 24 hours TTL
-  return { usage: newUsage, allowed: true };
 }
 
 export async function POST(request: NextRequest) {
@@ -61,14 +40,13 @@ export async function POST(request: NextRequest) {
   const { createHash } = upstash;
   const { CacheService, checkRateLimit, getUserIdentifier } = upstash;
 
-  const JWT_SECRET = process.env.WIDGET_JWT_SECRET || "";
   const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
+  const JWT_SECRET = process.env.WIDGET_JWT_SECRET || "";
 
   // lazy-init cache
   const cache = CacheService.getInstance();
 
   try {
-    // parse body first to check for demo flag
     const body = await request.json().catch(() => null);
     if (!body)
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -110,30 +88,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Demo-specific handling
-    let demoTtsUsage: { usage: number; allowed: boolean } | null = null;
-
-    if (isDemo || kbId === DEMO_KB_ID) {
-      const clientIP =
-        request.headers.get("x-forwarded-for")?.split(",")[0] ||
-        request.headers.get("x-real-ip") ||
-        "unknown";
-
-      demoTtsUsage = await trackDemoTTSUsage(clientIP, cache);
-
-      if (!demoTtsUsage.allowed) {
-        return NextResponse.json(
-          {
-            error: "Demo TTS limit reached",
-            message:
-              "You've reached the daily demo TTS limit. Please sign up for unlimited access.",
-            limit: DEMO_TTS_LIMIT_PER_IP,
-            usage: demoTtsUsage.usage,
-          },
-          { status: 429 },
-        );
-      }
-    }
+    const isDemoKb = DEMO_KB_ID !== null && kbId === DEMO_KB_ID;
 
     // parse auth header (may be widget jwt or API key)
     const authHeader = (request.headers.get("authorization") || "").replace(
@@ -141,9 +96,10 @@ export async function POST(request: NextRequest) {
       "",
     );
 
-    // try decode widget JWT if present (skip for demo)
+    // try decode widget JWT if present (we attempt to decode when header present).
+    // We'll still allow legacy demo KB calls without a token.
     let widgetPayload: { kbId?: string; origin?: string } | null = null;
-    if (authHeader && JWT_SECRET && !isDemo && kbId !== DEMO_KB_ID) {
+    if (authHeader && JWT_SECRET) {
       try {
         const key = new TextEncoder().encode(JWT_SECRET);
         const { payload } = await jwtVerify(authHeader, key);
@@ -156,37 +112,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // rate limit (use demo tracking or regular rate limiting)
-    let rateLimit;
-    if (isDemo || kbId === DEMO_KB_ID) {
-      // For demo, we use our custom tracking above
-      rateLimit = {
-        success: true,
-        remaining: Math.max(
-          0,
-          DEMO_TTS_LIMIT_PER_IP - (demoTtsUsage?.usage || 0),
-        ),
-        reset: new Date(Date.now() + 86400000), // 24 hours from now
-      };
+    // RATE LIMIT:
+    // - For legacy demo KB we skip server-side rate-limiting so the old widget continues to work.
+    // - For everything else we enforce the normal rate limiter.
+    let rateLimit: { success: boolean; remaining: number; reset?: Date };
+    if (isDemoKb) {
+      rateLimit = { success: true, remaining: Number.MAX_SAFE_INTEGER };
     } else {
       const userIdentifier = getUserIdentifier(request, widgetPayload) ?? null;
-      rateLimit = await checkRateLimit(userIdentifier, "api");
-
-      if (!rateLimit.success) {
+      const rl = await checkRateLimit(userIdentifier, "api");
+      if (!rl.success) {
         return NextResponse.json(
           {
             error: "Rate limit exceeded",
-            limit: rateLimit.limit,
-            remaining: rateLimit.remaining,
-            reset: rateLimit.reset.toISOString(),
+            limit: rl.limit,
+            remaining: rl.remaining,
+            reset: rl.reset.toISOString(),
           },
           { status: 429 },
         );
       }
+      rateLimit = rl;
     }
 
-    // Load KB metadata (use demo data for demo requests)
-    const targetKbId = isDemo || kbId === DEMO_KB_ID ? DEMO_KB_ID : kbId;
+    const targetKbId = kbId;
     const kb = await prisma.knowledgeBase.findUnique({
       where: { id: targetKbId },
       select: {
@@ -200,11 +149,7 @@ export async function POST(request: NextRequest) {
 
     if (!kb) {
       return NextResponse.json(
-        {
-          error: isDemo
-            ? "Demo service unavailable"
-            : "Knowledge base not found",
-        },
+        { error: "Knowledge base not found" },
         { status: 404 },
       );
     }
@@ -219,10 +164,12 @@ export async function POST(request: NextRequest) {
 
     const metadata = kbData.metadata;
 
-    // Auth checks (skip for demo)
-    if (!isDemo && kbId !== DEMO_KB_ID) {
+    // Auth checks:
+    // - If request targets legacy demo KB, allow missing API key / widget token (legacy widget)
+    // - Otherwise enforce widget token origin check OR require API key hash to match
+    if (!isDemoKb) {
       if (widgetPayload) {
-        if (widgetPayload.kbId !== kbId) {
+        if (widgetPayload.kbId && widgetPayload.kbId !== kbId) {
           return NextResponse.json(
             { error: "KB ID mismatch in widget token" },
             { status: 403 },
@@ -250,6 +197,7 @@ export async function POST(request: NextRequest) {
           );
         }
       } else {
+        // no widget token: require API key for private KBs
         const storedHash =
           typeof metadata.apiKeyHash === "string"
             ? metadata.apiKeyHash
@@ -293,7 +241,7 @@ export async function POST(request: NextRequest) {
       if (kbId && kbData) {
         const eventId = crypto.randomUUID();
         const minutes = estimateMinutesFromText(text);
-        const userIdentifier = isDemo
+        const userIdentifier = isDemoKb
           ? "demo-user"
           : getUserIdentifier(request, widgetPayload);
 
@@ -304,7 +252,7 @@ export async function POST(request: NextRequest) {
             channel: "voice",
             interactions: 1,
             minutes,
-            isCorrect: true, // always mark TTS as correct
+            isCorrect: true,
             isNegative: false,
             isFallback: false,
             eventId,
@@ -315,7 +263,7 @@ export async function POST(request: NextRequest) {
               voice,
               speed,
               cached: true,
-              isDemo: isDemo || kbId === DEMO_KB_ID,
+              isDemo: isDemoKb || isDemo,
             },
           });
         } catch (e) {
@@ -342,7 +290,7 @@ export async function POST(request: NextRequest) {
                 audioSize: cached?.length ?? 0,
                 requestPath,
                 userIdentifier,
-                isDemo: isDemo || kbId === DEMO_KB_ID,
+                isDemo: isDemoKb || isDemo,
                 createdAt: new Date().toISOString(),
               },
             },
@@ -358,7 +306,7 @@ export async function POST(request: NextRequest) {
                   audioSize: cached?.length ?? 0,
                   requestPath,
                   userIdentifier,
-                  isDemo: isDemo || kbId === DEMO_KB_ID,
+                  isDemo: isDemoKb || isDemo,
                   lastSeenAt: new Date().toISOString(),
                 },
               },
@@ -376,20 +324,18 @@ export async function POST(request: NextRequest) {
         textLength: text.length,
         cached: true,
         timestamp: new Date().toISOString(),
-        isDemo: isDemo || kbId === DEMO_KB_ID,
-        demoUsage: isDemo ? demoTtsUsage?.usage : undefined,
-        demoLimit: isDemo ? DEMO_TTS_LIMIT_PER_IP : undefined,
+        isDemo: isDemoKb || isDemo,
         rateLimit: {
           remaining: rateLimit.remaining,
-          reset: rateLimit.reset.toISOString?.() || rateLimit.reset,
+          reset: rateLimit.reset?.toISOString?.() || rateLimit.reset,
         },
       });
     }
 
     // Generate TTS via OpenAI (audio/speech endpoint)
     let ttsMs = 0;
-
     const ttsStart = Date.now();
+
     const ttsResp = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -404,6 +350,7 @@ export async function POST(request: NextRequest) {
         speed,
       }),
     });
+
     ttsMs = Date.now() - ttsStart;
 
     if (!ttsResp.ok) {
@@ -458,7 +405,7 @@ export async function POST(request: NextRequest) {
     if (kbId && kbData) {
       const eventId = crypto.randomUUID();
       const minutes = estimateMinutesFromText(text);
-      const userIdentifier = isDemo
+      const userIdentifier = isDemoKb
         ? "demo-user"
         : getUserIdentifier(request, widgetPayload);
 
@@ -469,7 +416,7 @@ export async function POST(request: NextRequest) {
           channel: "voice",
           interactions: 1,
           minutes,
-          isCorrect: true, // always mark TTS as correct
+          isCorrect: true,
           isNegative: false,
           isFallback: false,
           eventId,
@@ -481,7 +428,7 @@ export async function POST(request: NextRequest) {
             voice,
             speed,
             cached: false,
-            isDemo: isDemo || kbId === DEMO_KB_ID,
+            isDemo: isDemoKb || isDemo,
           },
         });
       } catch (e) {
@@ -509,7 +456,7 @@ export async function POST(request: NextRequest) {
               responseTimeMs: ttsMs,
               requestPath,
               userIdentifier,
-              isDemo: isDemo || kbId === DEMO_KB_ID,
+              isDemo: isDemoKb || isDemo,
               correctness: {
                 isCorrect: true,
                 isNegative: false,
@@ -531,7 +478,7 @@ export async function POST(request: NextRequest) {
                 responseTimeMs: ttsMs,
                 requestPath,
                 userIdentifier,
-                isDemo: isDemo || kbId === DEMO_KB_ID,
+                isDemo: isDemoKb || isDemo,
               },
             },
           },
@@ -556,12 +503,10 @@ export async function POST(request: NextRequest) {
       audioSize: audioBuffer.byteLength,
       cached: false,
       timestamp: new Date().toISOString(),
-      isDemo: isDemo || kbId === DEMO_KB_ID,
-      demoUsage: isDemo ? demoTtsUsage?.usage : undefined,
-      demoLimit: isDemo ? DEMO_TTS_LIMIT_PER_IP : undefined,
+      isDemo: isDemoKb || isDemo,
       rateLimit: {
         remaining: rateLimit.remaining,
-        reset: rateLimit.reset.toISOString?.() || rateLimit.reset,
+        reset: rateLimit.reset?.toISOString?.() || rateLimit.reset,
       },
     });
   } catch (err) {
