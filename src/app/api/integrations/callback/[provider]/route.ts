@@ -43,6 +43,9 @@ type Credentials = {
   instance_url?: string;
   hub_id?: string | null;
   hub_domain?: string | null;
+  facebook_user_id?: string | null;
+  facebook_name?: string | null;
+  facebook_email?: string | null;
 };
 
 const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
@@ -256,8 +259,7 @@ const getWhatsAppPhoneNumber = async (
   accessToken: string,
 ): Promise<string | null> => {
   try {
-    const graphVersion = process.env.GRAPH_VERSION ?? "v16.0";
-    const graphUrl = `https://graph.facebook.com/${graphVersion}/me?fields=businesses{owned_whatsapp_business_accounts{phone_numbers{display_phone_number,id}}}&access_token=${encodeURIComponent(accessToken)}`;
+    const graphUrl = `https://graph.facebook.com/v16.0/me?fields=businesses{owned_whatsapp_business_accounts{phone_numbers{display_phone_number,id}}}&access_token=${encodeURIComponent(accessToken)}`;
 
     const phoneInfo = await fetch(graphUrl).then((r) => r.json());
     const phoneNumber =
@@ -276,9 +278,8 @@ const getWhatsAppPhoneNumber = async (
 
 const getPagesAndInstagram = async (accessToken: string) => {
   try {
-    const graphVersion = process.env.GRAPH_VERSION ?? "v16.0";
     // Get pages the user manages (contains page id and page access tokens)
-    const pagesUrl = `https://graph.facebook.com/${graphVersion}/me/accounts?access_token=${encodeURIComponent(accessToken)}`;
+    const pagesUrl = `https://graph.facebook.com/v16.0/me/accounts?access_token=${encodeURIComponent(accessToken)}`;
     const pagesRes = await fetch(pagesUrl).then((r) => r.json());
     const firstPage = pagesRes?.data?.[0] ?? null;
 
@@ -295,7 +296,7 @@ const getPagesAndInstagram = async (accessToken: string) => {
     // Get instagram_business_account for the page
     let instagramBusinessAccountId = null;
     if (pageId) {
-      const pageInfoUrl = `https://graph.facebook.com/${graphVersion}/${pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(accessToken)}`;
+      const pageInfoUrl = `https://graph.facebook.com/v16.0/${pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(accessToken)}`;
       const pageInfo = await fetch(pageInfoUrl).then((r) => r.json());
       instagramBusinessAccountId =
         pageInfo?.instagram_business_account?.id ?? null;
@@ -309,6 +310,29 @@ const getPagesAndInstagram = async (accessToken: string) => {
       pageAccessToken: null,
       instagramBusinessAccountId: null,
     };
+  }
+};
+
+const getFacebookUserInfo = async (accessToken: string) => {
+  try {
+    const userUrl = `https://graph.facebook.com/v16.0/me?fields=id,name,email&access_token=${encodeURIComponent(accessToken)}`;
+
+    const userRes = await fetch(userUrl);
+    const userData = await userRes.json();
+
+    if (userData.error) {
+      console.warn("Could not fetch Facebook user info:", userData.error);
+      return null;
+    }
+
+    return {
+      facebook_user_id: userData.id,
+      facebook_name: userData.name,
+      facebook_email: userData.email,
+    };
+  } catch (error) {
+    console.warn("Error fetching Facebook user info:", error);
+    return null;
   }
 };
 
@@ -344,6 +368,8 @@ export async function GET(
     if (provider === "facebook") {
       tokenRes = await handleFacebookTokenExchange(code);
 
+      const facebookUser = await getFacebookUserInfo(tokenRes.access_token);
+
       // Get platform-specific data based on channel
       let phoneNumberId: string | null = null;
       let pagesInfo = {
@@ -367,6 +393,9 @@ export async function GET(
         page_access_token: pagesInfo.pageAccessToken,
         instagram_business_account_id: pagesInfo.instagramBusinessAccountId,
         scope: tokenRes.scope ?? null,
+        facebook_user_id: facebookUser?.facebook_user_id ?? null,
+        facebook_name: facebookUser?.facebook_name ?? null,
+        facebook_email: facebookUser?.facebook_email ?? null,
       };
     } else {
       tokenRes = await exchangeCodeForTokens(provider, code);
