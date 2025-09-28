@@ -75,7 +75,7 @@ interface RequestBody {
   kbId: string;
   webUrl: string;
   userId: string;
-  depth?: number;
+  depth?: Depth;
 }
 
 // Configuration
@@ -110,6 +110,16 @@ const TRACKING_PARAMS = [
   "ref",
   "source",
 ];
+
+// Link limits per depth to prevent queue overload
+type Depth = 0 | 1 | 2 | 3;
+
+const MAX_LINKS_PER_DEPTH: Record<Depth, number> = {
+  3: 25, // Full crawl at depth 3+
+  2: 20, // Good coverage at depth 2
+  1: 15, // Reduced at depth 1
+  0: 0, // No child crawling at depth 0
+};
 
 function canonicalizeUrl(raw: string): string {
   try {
@@ -967,7 +977,11 @@ class EnhancedWebCrawler {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  extractLinksFromHtml(html: string, baseUrl: string): string[] {
+  extractLinksFromHtml(
+    html: string,
+    baseUrl: string,
+    maxLinks: number = 20,
+  ): string[] {
     try {
       const $ = load(html);
       const origin = new URL(baseUrl).origin;
@@ -981,8 +995,10 @@ class EnhancedWebCrawler {
           const fullUrl = new URL(href, baseUrl).toString();
           const parsedUrl = new URL(fullUrl);
 
+          // Same origin check
           if (parsedUrl.origin !== origin) return;
 
+          // Skip file extensions that aren't web pages
           if (
             fullUrl.match(
               /\.(jpg|jpeg|png|gif|svg|pdf|zip|mp4|mp3|css|js|woff|woff2|ico|xml|json)(\?|$)/i,
@@ -990,25 +1006,57 @@ class EnhancedWebCrawler {
           )
             return;
 
+          // Skip admin/system paths
           if (
             fullUrl.match(
-              /\/(login|register|logout|admin|api|cdn|assets|static|wp-admin|wp-content)\//i,
+              /\/(login|register|logout|admin|api|cdn|assets|static|wp-admin|wp-content|_next)\//i,
             )
           )
             return;
 
+          // Skip special protocols
           if (href.match(/^(mailto:|tel:|javascript:|#|ftp:|file:)/)) return;
 
+          // Skip overly complex URLs
           if (parsedUrl.searchParams.toString().length > 200) return;
+
+          // Prioritize content pages over navigation
+          const linkText = $(el).text().trim().toLowerCase();
+          const isNavigationLink =
+            /^(home|menu|nav|header|footer|sidebar)$/i.test(linkText);
+
+          // Skip pure navigation links if we have enough content links
+          if (isNavigationLink && links.size >= 10) return;
 
           const canonicalUrl = canonicalizeUrl(fullUrl);
           links.add(canonicalUrl);
+
+          // Stop if we've reached our limit
+          if (links.size >= maxLinks) return false;
         } catch {
           // Invalid URL, skip
         }
       });
 
-      return Array.from(links);
+      // Prioritize content pages
+      const linkArray = Array.from(links);
+      return linkArray
+        .sort((a, b) => {
+          // Prioritize pages that look like content (blog posts, articles, etc.)
+          const aIsContent =
+            /\/(blog|article|post|news|story|guide|tutorial|about|service|product)/i.test(
+              a,
+            );
+          const bIsContent =
+            /\/(blog|article|post|news|story|guide|tutorial|about|service|product)/i.test(
+              b,
+            );
+
+          if (aIsContent && !bIsContent) return -1;
+          if (!aIsContent && bIsContent) return 1;
+          return 0;
+        })
+        .slice(0, maxLinks);
     } catch (error) {
       console.warn("Link extraction failed:", error);
       return [];
@@ -1152,93 +1200,6 @@ class EnhancedWebCrawler {
     return rscCount >= 2 || hasMinimalHTML;
   }
 
-  private async fetchHTMLWithRetry(
-    url: string,
-    userAgent: string,
-    extraHeaders: Record<string, string> = {},
-    maxRetries: number = 3,
-  ): Promise<string> {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const html = await this.fetchHTML(url, userAgent, extraHeaders);
-
-        if (!this.detectRSC(html)) {
-          return html;
-        }
-
-        if (attempt < maxRetries) {
-          console.log(
-            `Attempt ${attempt}: Got RSC payload, retrying in ${attempt * 1000}ms...`,
-          );
-          await this.delay(attempt * 1000);
-        }
-      } catch (error) {
-        if (attempt === maxRetries) throw error;
-        console.log(`Attempt ${attempt} failed: ${error}, retrying...`);
-        await this.delay(attempt * 500);
-      }
-    }
-
-    console.log(`Final attempt with cache-busting headers...`);
-    return this.fetchHTML(url, userAgent, {
-      ...extraHeaders,
-      "Cache-Control": "no-cache, no-store, must-revalidate",
-      Pragma: "no-cache",
-      Expires: "0",
-      "X-Requested-With": "XMLHttpRequest",
-    });
-  }
-
-  private async fetchHTMLWithEnhancedHeaders(
-    url: string,
-    attempt: number = 1,
-  ): Promise<string> {
-    const userAgents = [
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    ];
-
-    const headers = {
-      "User-Agent": userAgents[attempt % userAgents.length],
-      Accept:
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-      "Accept-Language": url.includes("/ar/") ? "ar,en;q=0.9" : "en,ar;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-      "Sec-Fetch-Dest": "document",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "none",
-      "Sec-Fetch-User": "?1",
-      "Upgrade-Insecure-Requests": "1",
-      "Sec-Ch-Ua":
-        '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-      "Sec-Ch-Ua-Mobile": "?0",
-      "Sec-Ch-Ua-Platform": '"Windows"',
-    };
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
-
-    try {
-      const response = await fetch(url, {
-        headers,
-        signal: controller.signal,
-        redirect: "follow",
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      return await response.text();
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
   private isGoodExtraction(
     result: ExtractionResult | null,
     url: string,
@@ -1270,6 +1231,35 @@ class EnhancedWebCrawler {
       return false;
 
     return true;
+  }
+}
+
+// Helper function to get max links based on depth
+function getMaxLinksForDepth(depth: Depth): number {
+  return MAX_LINKS_PER_DEPTH[depth] || 5;
+}
+
+// Optimized function to check existing URLs in batch
+async function getExistingUrls(
+  kbId: string,
+  urls: string[],
+): Promise<Set<string>> {
+  if (urls.length === 0) return new Set();
+
+  try {
+    const canonicalUrls = urls.map(canonicalizeUrl);
+    const existingDocs = await prisma.document.findMany({
+      where: {
+        kbId,
+        sourceUrl: { in: canonicalUrls },
+      },
+      select: { sourceUrl: true },
+    });
+
+    return new Set(existingDocs.map((doc) => doc.sourceUrl as string));
+  } catch (error) {
+    console.error("Failed to check existing URLs:", error);
+    return new Set(); // Return empty set on error to allow processing
   }
 }
 
@@ -1403,6 +1393,8 @@ async function handler(req: Request): Promise<Response> {
             webUrl,
             userId,
             depth,
+            puppeteerCrawler,
+            retryResult.html,
           );
         }
       }
@@ -1424,6 +1416,8 @@ async function handler(req: Request): Promise<Response> {
       webUrl,
       userId,
       depth,
+      crawler,
+      extracted.html,
     );
   } catch (error) {
     const errorMessage =
@@ -1459,12 +1453,15 @@ function isValidExtraction(extracted: ExtractionResult, url: string): boolean {
   return extracted.wordCount >= 15 && extracted.content.length > 100;
 }
 
+// Optimized processSuccessfulExtraction with batch processing and circuit breakers
 async function processSuccessfulExtraction(
   extracted: ExtractionResult,
   kbId: string,
   webUrl: string,
   userId: string,
-  depth: number,
+  depth: Depth,
+  crawler: EnhancedWebCrawler,
+  html?: string,
 ) {
   const { title, content, wordCount, extractionMethod } = extracted;
 
@@ -1476,6 +1473,7 @@ async function processSuccessfulExtraction(
     wordCount,
   );
 
+  // Queue embedding processing
   try {
     if (savedDocument?.id) {
       await qstash.publishJSON({
@@ -1488,8 +1486,96 @@ async function processSuccessfulExtraction(
     console.error("Failed to queue embedding processing:", error);
   }
 
+  let enqueuedChildren = 0;
+  let skippedExisting = 0;
+  const failedLinks: string[] = [];
+
+  // Discover and crawl additional links if depth > 0
+  if (depth > 0 && html) {
+    try {
+      const discoveredLinks = crawler.extractLinksFromHtml(html, webUrl);
+      console.log(`Discovered ${discoveredLinks.length} links from ${webUrl}`);
+
+      // Circuit breaker for sites with too many links
+      const maxLinksForDepth = getMaxLinksForDepth(depth);
+      if (discoveredLinks.length > 100) {
+        console.warn(
+          `Site has ${discoveredLinks.length} links, applying circuit breaker`,
+        );
+        // For high-traffic sites, be more selective
+        const limitedLinks = discoveredLinks
+          .filter((link) =>
+            // Prioritize content pages for high-traffic sites
+            /\/(blog|article|post|news|story|guide|tutorial|about|service|product|page)/i.test(
+              link,
+            ),
+          )
+          .slice(0, Math.floor(maxLinksForDepth / 2));
+
+        console.log(`Reduced to ${limitedLinks.length} high-priority links`);
+      }
+
+      const linksToProcess = discoveredLinks.slice(0, maxLinksForDepth);
+
+      // Batch check for existing URLs to optimize database queries
+      const existingUrls = await getExistingUrls(kbId, linksToProcess);
+      const newLinks = linksToProcess.filter(
+        (link) => !existingUrls.has(canonicalizeUrl(link)),
+      );
+
+      skippedExisting = linksToProcess.length - newLinks.length;
+      console.log(
+        `Processing ${newLinks.length} new links, skipping ${skippedExisting} existing`,
+      );
+
+      // Process new links in optimized batches
+      const batchSize = 5;
+      for (let i = 0; i < newLinks.length; i += batchSize) {
+        const batch = newLinks.slice(i, i + batchSize);
+
+        const batchPromises = batch.map(async (link, batchIndex) => {
+          const overallIndex = i + batchIndex;
+          try {
+            await qstash.publishJSON({
+              url: `${process.env.BASE_URL}/api/process-crawl`,
+              body: {
+                kbId,
+                webUrl: link,
+                userId,
+                depth: depth - 1, // Reduce depth for child pages
+              },
+              delay: Math.floor(overallIndex / 3) * 10 + 30, // Optimized staggered delays
+            });
+            enqueuedChildren++;
+          } catch (error) {
+            console.error(`Failed to enqueue child link ${link}:`, error);
+            failedLinks.push(link);
+          }
+        });
+
+        await Promise.allSettled(batchPromises);
+
+        // Smaller delay between batches for better throughput
+        if (i + batchSize < newLinks.length) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+
+      console.log(`Link processing summary for ${webUrl}:`);
+      console.log(`  - Discovered: ${discoveredLinks.length}`);
+      console.log(`  - Processed: ${linksToProcess.length}`);
+      console.log(`  - Enqueued: ${enqueuedChildren}`);
+      console.log(`  - Skipped (existing): ${skippedExisting}`);
+      if (failedLinks.length > 0) {
+        console.log(`  - Failed: ${failedLinks.length}`);
+      }
+    } catch (error) {
+      console.error("Failed to process discovered links:", error);
+    }
+  }
+
   console.log(
-    `Successfully processed ${webUrl} using ${extractionMethod}:\n  - Content: ${wordCount} words\n  - Title: "${title}"\n  - Method: ${extractionMethod}`,
+    `Successfully processed ${webUrl} using ${extractionMethod}:\n  - Content: ${wordCount} words\n  - Title: "${title}"\n  - Method: ${extractionMethod}\n  - Child pages enqueued: ${enqueuedChildren}`,
   );
 
   return new Response(
@@ -1503,7 +1589,10 @@ async function processSuccessfulExtraction(
         contentLength: content.length,
         extractionMethod: extractionMethod || "unknown",
       },
-      enqueuedChildren: 0,
+      enqueuedChildren,
+      skippedExisting,
+      failedLinks: failedLinks.length,
+      depth,
     }),
     { status: 200 },
   );
