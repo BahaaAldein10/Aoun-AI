@@ -31,7 +31,9 @@ export const setupSchema = (dict: Dictionary) => {
         (val) =>
           !val || val.startsWith("http://") || val.startsWith("https://"),
         { message: t.invalid_url_protocol },
-      ),
+      )
+      .optional()
+      .or(z.literal("")),
     personality: z.string().optional(),
     voice: z.string().min(1, "Please select a voice"),
     primaryColor: z.string().regex(/^#([0-9A-F]{3}){1,2}$/i, "Invalid color"),
