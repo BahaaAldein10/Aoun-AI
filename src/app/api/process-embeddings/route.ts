@@ -286,32 +286,70 @@ async function handler(req: Request) {
 
       if (shouldNotify) {
         try {
-          // Get final stats for notification
-          const finalStats = await prisma.knowledgeBase.findUnique({
-            where: { id: kbId },
-            select: {
-              title: true,
-              metadata: true,
-              _count: {
+          // Attempt to atomically claim the notification.
+          // updateMany is atomic: if notificationSent is still false, this will set it to true and return count = 1.
+          const res = await prisma.knowledgeBase.updateMany({
+            where: { id: kbId, notificationSent: false },
+            data: { notificationSent: true },
+          });
+
+          if (res.count === 0) {
+            console.log(
+              `Notification for KB ${kbId} already claimed by another process — skipping notify.`,
+            );
+          } else {
+            // proceed to gather final stats and notify
+            try {
+              const finalStats = await prisma.knowledgeBase.findUnique({
+                where: { id: kbId },
                 select: {
-                  documents: { where: { content: { not: null } } },
-                  embeddings: true,
+                  title: true,
+                  metadata: true,
+                  _count: {
+                    select: {
+                      documents: { where: { content: { not: null } } },
+                      embeddings: true,
+                    },
+                  },
                 },
-              },
-            },
-          });
+              });
 
-          await notifyUserProcessingDone(userId, kbId, {
-            title: finalStats?.title || "Knowledge Base",
-            pages: finalStats?._count.documents || 0,
-            embeddings: finalStats?._count.embeddings || 0,
-            link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
-            language: (finalStats?.metadata as KbMetadata)?.language,
-          });
+              await notifyUserProcessingDone(userId, kbId, {
+                title: finalStats?.title || "Knowledge Base",
+                pages: finalStats?._count.documents || 0,
+                embeddings: finalStats?._count.embeddings || 0,
+                link: `${process.env.BASE_URL}/en/dashboard/knowledge-base`,
+                language: (finalStats?.metadata as KbMetadata)?.language,
+              });
 
-          console.log(`User ${userId} notified about KB ${kbId} completion.`);
-        } catch (notifyErr) {
-          console.error("Failed to notify user about completion:", notifyErr);
+              console.log(
+                `User ${userId} notified about KB ${kbId} completion (claimed by this run).`,
+              );
+            } catch (notifyErr) {
+              console.error(
+                "Failed to notify user about completion:",
+                notifyErr,
+              );
+
+              // Reset the flag so future runs can attempt to notify again
+              try {
+                await prisma.knowledgeBase.update({
+                  where: { id: kbId },
+                  data: { notificationSent: false },
+                });
+                console.log(
+                  `Reset notificationSent for KB ${kbId} after failed notify`,
+                );
+              } catch (resetErr) {
+                console.error(
+                  `Failed to reset notificationSent for KB ${kbId}:`,
+                  resetErr,
+                );
+              }
+            }
+          }
+        } catch (claimErr) {
+          console.error("Failed to claim notification flag:", claimErr);
         }
       }
 
