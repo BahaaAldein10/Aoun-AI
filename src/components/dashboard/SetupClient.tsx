@@ -21,7 +21,11 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Dictionary } from "@/contexts/dictionary-context";
-import { createKb, updateKb } from "@/lib/actions/dashboard";
+import {
+  createKb,
+  deleteUploadedFileUrl,
+  updateKb,
+} from "@/lib/actions/dashboard";
 import { qstash } from "@/lib/actions/qstash";
 import { SupportedLang } from "@/lib/dictionaries";
 import { SetupFormValues, setupSchema } from "@/lib/schemas/dashboard";
@@ -216,10 +220,21 @@ const SetupClient = ({
     setSelectedFiles(next);
   };
 
-  const removeUploadedUrl = (url: string) => {
-    const files = getValues("files") || [];
-    const next = files.filter((f) => f !== url);
-    setValue("files", next);
+  const removeUploadedUrl = async (url: string) => {
+    try {
+      const deleted = await deleteUploadedFileUrl(url);
+
+      if (deleted) {
+        const files = getValues("files") || [];
+        const next = files.filter((f) => f !== url);
+        setValue("files", next);
+
+        toast.success(t.file_deleted);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error(t.file_delete_failed);
+    }
   };
 
   const handleUpload = async () => {

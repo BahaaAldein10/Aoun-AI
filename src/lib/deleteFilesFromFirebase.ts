@@ -43,6 +43,8 @@ export async function deleteFilesFromFirebase(paths: string[]) {
         }
       }),
     );
+
+    return true;
   } catch (error) {
     console.error("[Firebase deleteFiles] Error:", error);
     throw error;

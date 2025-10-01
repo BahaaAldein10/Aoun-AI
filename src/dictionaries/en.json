@@ -431,7 +431,10 @@
     "total_agents": "Total Agents",
     "total_documents": "Total Documents",
     "with_urls": "With URLs",
-    "total_embeddings": "Total Embeddings"
+    "total_embeddings": "Total Embeddings",
+
+    "file_deleted": "File deleted",
+    "file_delete_failed": "Failed to delete file"
   },
   "dashboard_knowledge_base": {
     "title": "Knowledge Base",

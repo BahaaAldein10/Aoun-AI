@@ -433,7 +433,10 @@
     "total_agents": "إجمالي الوكلاء",
     "total_documents": "إجمالي المستندات",
     "with_urls": "مع روابط",
-    "total_embeddings": "إجمالي التضمينات"
+    "total_embeddings": "إجمالي التضمينات",
+
+    "file_deleted": "تم حذف الملف",
+    "file_delete_failed": "فشل حذف الملف"
   },
   "dashboard_knowledge_base": {
     "title": "قاعدة المعرفة",

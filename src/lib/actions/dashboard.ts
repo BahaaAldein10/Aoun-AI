@@ -1,6 +1,7 @@
 "use server";
 
 import { Dictionary } from "@/contexts/dictionary-context";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 import console from "console";
 import { revalidatePath } from "next/cache";
 import z from "zod";
@@ -254,5 +255,41 @@ export async function deleteKb(kbId: string) {
         ? error.message
         : "Unexpected error occurred while deleting Knowledge Base",
     );
+  }
+}
+
+export async function deleteUploadedFileUrl(url: string) {
+  try {
+    const file = await prisma.uploadedFile.findFirstOrThrow({
+      where: { url },
+      select: { meta: true },
+    });
+
+    const fileMeta = file.meta as { storagePath?: string };
+    const filePath = fileMeta?.storagePath;
+
+    if (!filePath) {
+      throw new Error("File storage path not found in metadata");
+    }
+
+    const deletedFile = await deleteFilesFromFirebase([filePath]);
+    console.log("Deleted file from Firebase:", filePath);
+
+    return deletedFile;
+  } catch (error: unknown) {
+    console.error(error);
+
+    if (error instanceof PrismaClientKnownRequestError) {
+      if (error.code === "P2025") {
+        throw new Error("Failed to delete file from Firebase: File not found");
+      }
+      throw new Error("Failed to delete file from Firebase: Prisma error");
+    }
+
+    if (error instanceof Error) {
+      throw new Error(`Failed to delete file from Firebase: ${error.message}`);
+    }
+
+    throw new Error("Failed to delete file from Firebase: Unexpected error");
   }
 }
