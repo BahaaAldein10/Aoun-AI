@@ -51,7 +51,21 @@ export async function POST(req: Request) {
         model,
         voice: voice || demoKbData.metadata?.voice || "alloy",
         modalities: ["text", "audio"],
-        instructions: `You are an assistant answering user questions about the platform. ${demoKbData.metadata?.personality}`,
+        instructions:
+          `You are a knowledgeable voice assistant with direct access to our platform's knowledge base.
+
+CRITICAL INSTRUCTIONS:
+1. Answer questions directly using information from the search_knowledge_base function results
+2. DO NOT redirect users with phrases like "you can check the platform" or "see our website"
+3. Extract and present the actual information from search results in your responses
+4. Be conversational, natural, and concise in voice format
+5. Only say you don't have information if search results genuinely don't contain relevant details
+6. Synthesize information from multiple sources when appropriate
+7. Present information as if you're explaining it directly, not reading from a document
+
+${demoKbData.metadata?.personality || ""}
+
+Keep responses brief and natural for voice conversation.`.trim(),
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
         turn_detection: {
@@ -68,7 +82,7 @@ export async function POST(req: Request) {
             type: "function",
             name: "search_knowledge_base",
             description:
-              "Search the knowledge base for relevant information to answer the user's question",
+              "Search the knowledge base for relevant information to answer the user's question. Always use this before responding to questions about the platform or services.",
             parameters: {
               type: "object",
               properties: {
@@ -144,12 +158,24 @@ export async function POST(req: Request) {
     const personality = (metadata?.personality as string) ?? "";
     const kbTitle = kb.title || "Knowledge Base";
 
-    const kbInstructions = `You are an AI assistant with access to a knowledge base called "${kbTitle}". ${personality}
-
-IMPORTANT: When users ask questions, provide answers based on the knowledge base content. Always ground your responses in the provided context and be helpful and accurate. If you don't have relevant information in the knowledge base to answer a question, politely explain that you don't have that information available and suggest asking something else related to the knowledge base content.`;
-
     const model =
       process.env.OPENAI_REALTIME_MODEL || "gpt-4o-mini-realtime-preview";
+
+    const kbInstructions =
+      `You are a knowledgeable voice assistant with direct access to the "${kbTitle}" knowledge base.
+
+CRITICAL INSTRUCTIONS:
+1. Answer questions directly using information from the search_knowledge_base function results
+2. DO NOT redirect users with phrases like "you can check the platform" or refer them elsewhere
+3. Extract and present the actual information from search results in your responses
+4. Be conversational, natural, and concise - this is a voice conversation
+5. Only say you don't have information if search results genuinely don't contain relevant details
+6. Synthesize information from multiple sources when appropriate
+7. Present information naturally as if explaining it directly to someone
+
+${personality ? `Additional guidance: ${personality}` : ""}
+
+Keep responses brief and natural for voice conversation. Aim for 2-3 sentences unless more detail is specifically requested.`.trim();
 
     const sessionConfig = {
       model,
@@ -172,11 +198,15 @@ IMPORTANT: When users ask questions, provide answers based on the knowledge base
           type: "function",
           name: "search_knowledge_base",
           description:
-            "Search the knowledge base for relevant information to answer the user's question",
+            "Search the knowledge base for relevant information to answer the user's question. Always use this function when users ask about specific topics, features, or information.",
           parameters: {
             type: "object",
             properties: {
-              query: { type: "string", description: "The search query" },
+              query: {
+                type: "string",
+                description:
+                  "The search query to find relevant information. Be specific and focus on key terms.",
+              },
             },
             required: ["query"],
           },

@@ -184,7 +184,12 @@ export async function POST(request: NextRequest) {
     if (!kbData) {
       const kb = await prisma.knowledgeBase.findUnique({
         where: { id: kbId },
-        select: { id: true, userId: true, bot: { select: { id: true } }, metadata: true },
+        select: {
+          id: true,
+          userId: true,
+          bot: { select: { id: true } },
+          metadata: true,
+        },
       });
 
       if (!kb) {
@@ -322,9 +327,6 @@ export async function POST(request: NextRequest) {
 
     const isArabic = /[\u0600-\u06FF]/.test(transcript ?? "");
     const llmModel = process.env.CHAT_MODEL || "gpt-4o-mini";
-    const systemPromptBase = isArabic
-      ? "أنت مساعد ذكي يتحدث العربية. كن مفيداً ومختصراً في إجاباتك. أجب باللغة العربية."
-      : "You are a helpful assistant. Keep responses concise and in the user's language.";
 
     // ===== KB grounding (embedding + retrieval) =====
     let retrieved: Array<{ text: string; similarity: number; metadata: any }> =
@@ -384,15 +386,47 @@ export async function POST(request: NextRequest) {
     });
 
     const personality = (metadata?.personality as string) ?? "";
+
+    // Build retrieval text with clearer labeling
     const retrievalText = sourceBlocks.length
-      ? `Use the following retrieved snippets to ground your answer:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
-      : "";
+      ? `\n\nRetrieved information from knowledge base:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
+      : "\n\nNo specific information was retrieved from the knowledge base for this query. Provide a helpful general response or politely explain you don't have that information.\n\n";
+
+    // Build improved system instruction based on language
+    const baseSystemInstruction = isArabic
+      ? `أنت مساعد صوتي ذكي لديه وصول مباشر إلى قاعدة معرفة المنصة.
+
+تعليمات مهمة:
+1. أجب على الأسئلة مباشرة باستخدام المعلومات من المصادر المقدمة أدناه
+2. لا تخبر المستخدمين "يمكنك التحقق من المنصة" أو تحيلهم إلى مكان آخر
+3. استخرج وقدم المعلومات الفعلية من المصادر في إجاباتك
+4. كن محادثاً وطبيعياً ومختصراً - هذه محادثة صوتية
+5. قل فقط أنه ليس لديك معلومات إذا لم تحتوي المصادر على تفاصيل ذات صلة
+6. قدم المعلومات بشكل طبيعي كما لو كنت تشرحها مباشرة لشخص ما
+
+${personality || ""}`
+      : `You are a knowledgeable voice assistant with direct access to the platform's knowledge base.
+
+CRITICAL INSTRUCTIONS:
+1. Answer questions directly using information from the SOURCE blocks provided below
+2. DO NOT redirect users with phrases like "you can check the platform" or refer them elsewhere
+3. Extract and present the actual information from the sources in your responses
+4. Be conversational, natural, and concise - this is a voice conversation
+5. Only say you don't have information if the sources genuinely don't contain relevant details
+6. Synthesize information from multiple sources when appropriate
+7. Present information naturally as if explaining it directly to someone
+
+${personality || ""}
+
+Keep responses brief and natural for voice. Aim for 2-3 sentences unless more detail is requested.`;
 
     const finalSystemInstruction =
-      `${personality || systemPromptBase}\n\n${retrievalText}`.trim();
+      `${baseSystemInstruction}${retrievalText}`.trim();
 
-    // Build LLM input
-    const llmInput = `${finalSystemInstruction}\n\nUser: ${transcript}\nAssistant:`;
+    // Build LLM input with clearer structure
+    const llmInput = isArabic
+      ? `${finalSystemInstruction}\n\nالسؤال الحالي:\nالمستخدم: ${transcript}\n\nقدم إجابة مباشرة ومفيدة باستخدام المعلومات المسترجعة أعلاه:\nالمساعد:`
+      : `${finalSystemInstruction}\n\nCurrent question:\nUser: ${transcript}\n\nProvide a direct, informative answer using the retrieved information above:\nAssistant:`;
 
     // LLM caching based on llmInput
     const responseHash = createHash(llmInput);

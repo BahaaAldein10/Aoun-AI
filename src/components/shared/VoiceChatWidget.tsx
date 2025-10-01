@@ -56,6 +56,7 @@ export default function VoiceChatWidget({
   // Voice UI state
   const [recording, setRecording] = useState(false);
   const [voicePending, setVoicePending] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [permission, setPermission] = useState<boolean | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -70,6 +71,7 @@ export default function VoiceChatWidget({
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
+  const processingTimeoutRef = useRef<number | null>(null);
 
   // WebRTC refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -234,8 +236,10 @@ export default function VoiceChatWidget({
       };
       pushMessage(botMsg);
 
-      // Generate TTS for text messages
-      generateTTS(reply, botMsg.id);
+      // FIXED: Only generate TTS in voice mode
+      if (mode === "voice") {
+        generateTTS(reply, botMsg.id);
+      }
     } catch (error) {
       console.error("Text chat error:", error);
       const errorMsg: Msg = {
@@ -578,24 +582,30 @@ export default function VoiceChatWidget({
 
           case "input_audio_buffer.speech_started":
             console.log("User started speaking");
+            setIsProcessing(true);
+            // Clear any existing timeout
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+            }
             break;
 
-          case "conversation.item.created":
-            if (
-              payload.item?.type === "message" &&
-              payload.item?.role === "user"
-            ) {
-              const userText = payload.item?.content?.[0]?.text;
-              if (userText) {
-                pushMessage({
-                  id: `user-${Date.now()}`,
-                  role: "user",
-                  text: userText,
-                  createdAt: new Date().toISOString(),
-                  isVoice: true,
-                });
-              }
-            }
+          case "input_audio_buffer.speech_stopped":
+            console.log("User stopped speaking - waiting for response");
+            // Set a timeout for response (30 seconds)
+            processingTimeoutRef.current = window.setTimeout(() => {
+              console.warn("Response timeout - no response received");
+              setIsProcessing(false);
+              pushMessage({
+                id: `timeout-${Date.now()}`,
+                role: "bot",
+                text:
+                  lang === "en"
+                    ? "Sorry, I didn't catch that. Could you try again?"
+                    : "عذراً، لم أسمع ذلك. هل يمكنك المحاولة مرة أخرى؟",
+                createdAt: new Date().toISOString(),
+                isVoice: true,
+              });
+            }, 30000);
             break;
 
           case "response.function_call_done":
@@ -604,17 +614,20 @@ export default function VoiceChatWidget({
                 const searchArgs = JSON.parse(payload.arguments);
                 const searchQuery = searchArgs.query;
 
-                const searchResponse = await fetch("/api/realtime/search", {
+                // Add timeout to KB search
+                const searchPromise = fetch("/api/realtime/search", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     kbId: DEMO_KB_ID,
                     query: searchQuery,
-                    topK: 5,
+                    topK: 3,
                     isDemo: true,
                   }),
+                  signal: AbortSignal.timeout(10000), // 10 second timeout
                 });
 
+                const searchResponse = await searchPromise;
                 const searchData = await searchResponse.json();
 
                 if (searchResponse.ok && searchData.success) {
@@ -641,7 +654,7 @@ export default function VoiceChatWidget({
                       output: JSON.stringify({
                         error: "Failed to search knowledge base",
                         contextText:
-                          "No information could be retrieved from the knowledge base.",
+                          "I'm having trouble accessing the information right now. Let me try to help anyway.",
                       }),
                     },
                   };
@@ -650,15 +663,23 @@ export default function VoiceChatWidget({
                 }
               } catch (searchError) {
                 console.error("KB search error:", searchError);
+
+                // Check if it's a timeout
+                const isTimeout =
+                  searchError instanceof Error &&
+                  (searchError.name === "AbortError" ||
+                    searchError.message.includes("timeout"));
+
                 const errorResult = {
                   type: "conversation.item.create",
                   item: {
                     type: "function_call_output",
                     call_id: payload.call_id,
                     output: JSON.stringify({
-                      error: "Search failed",
-                      contextText:
-                        "Unable to search the knowledge base at this time.",
+                      error: isTimeout ? "Search timeout" : "Search failed",
+                      contextText: isTimeout
+                        ? "The search is taking too long. Let me give you a general answer."
+                        : "I'm having trouble searching right now. Let me help you anyway.",
                     }),
                   },
                 };
@@ -668,20 +689,23 @@ export default function VoiceChatWidget({
             }
             break;
 
-          case "response.audio_transcript.done":
-            if (payload.transcript) {
-              pushMessage({
-                id: `transcript-${Date.now()}`,
-                role: "bot",
-                text: payload.transcript,
-                createdAt: new Date().toISOString(),
-                isVoice: true,
-              });
+          case "response.audio.done":
+          case "response.done":
+            // Clear processing state when response completes
+            setIsProcessing(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
             }
             break;
 
           case "error":
             console.error("Realtime API error:", payload);
+            setIsProcessing(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
             pushMessage({
               id: `error-${Date.now()}`,
               role: "bot",
@@ -695,7 +719,7 @@ export default function VoiceChatWidget({
             break;
 
           default:
-            console.debug("Unhandled event type:", payload.type, payload);
+            console.debug("Unhandled event type:", payload.type);
         }
       } catch {
         console.debug("Non-JSON data channel message:", ev.data);
@@ -704,10 +728,16 @@ export default function VoiceChatWidget({
 
     dc.onerror = (error) => {
       console.error("Data channel error:", error);
+      setIsProcessing(false);
     };
 
     dc.onclose = () => {
       console.debug("Data channel closed");
+      setIsProcessing(false);
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
     };
 
     return dc;
@@ -778,7 +808,7 @@ export default function VoiceChatWidget({
       await pc.setLocalDescription(offer);
 
       console.log("Waiting for ICE gathering...");
-      await waitForIceGatheringComplete(pc, 10000);
+      await waitForIceGatheringComplete(pc, 5000);
 
       const finalOffer = pc.localDescription?.sdp;
       if (!finalOffer) {

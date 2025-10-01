@@ -420,23 +420,38 @@ export async function POST(req: Request) {
 
     // Build prompt (use KB/personality if present)
     const personality = (metadata?.personality as string) || "";
+
+    // FIXED: More explicit system instruction that tells the model to use retrieved data
     const systemInstruction =
-      `You are an assistant answering user questions using the provided sources. ${personality}`.trim();
+      `You are a knowledgeable assistant with direct access to our platform's knowledge base.
+
+CRITICAL INSTRUCTIONS:
+1. Answer questions directly using the information from the SOURCE blocks provided below
+2. DO NOT redirect users with phrases like "you can see it in our platform" or "check [HERE]"
+3. Extract and present the actual information from the sources in your response
+4. Be specific and detailed when answering - the sources contain the information users need
+5. Only say you don't have information if the sources genuinely don't contain relevant details
+6. Synthesize information from multiple sources when appropriate
+7. Present information naturally as if you're explaining it directly, not as if you're reading from a document
+
+${personality ? `Additional guidance: ${personality}` : ""}`.trim();
 
     const retrievalText = sourceBlocks.length
-      ? `Use the following retrieved snippets to ground your answer:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
-      : "";
+      ? `\n\nRetrieved information from knowledge base:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
+      : "\n\nNo specific information was retrieved from the knowledge base for this query.\n\n";
 
     const historyText = history.length
-      ? history
+      ? "Previous conversation:\n" +
+        history
           .map(
             (h) =>
               `${h.role === "assistant" ? "Assistant" : "User"}: ${sanitizeText(h.text ?? "")}`,
           )
-          .join("\n") + "\n\n"
+          .join("\n") +
+        "\n\n"
       : "";
 
-    const userBlock = `User: ${sanitizeText(message)}\nAssistant:`;
+    const userBlock = `Current question:\nUser: ${sanitizeText(message)}\n\nProvide a direct, informative answer using the retrieved information above:\nAssistant:`;
     let prompt = `${systemInstruction}\n\n${retrievalText}${historyText}${userBlock}`;
 
     // Trim prompt if too long
