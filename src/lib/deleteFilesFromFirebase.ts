@@ -21,14 +21,26 @@ export async function deleteFilesFromFirebase(paths: string[]) {
   try {
     await Promise.all(
       paths.map(async (path) => {
+        console.log("[Deleting from Firebase]:", path);
         const fileRef = bucket.file(path);
-        await fileRef.delete().catch((err) => {
+        const [exists] = await fileRef.exists();
+
+        try {
+          if (!exists) {
+            console.warn(`File does not exist in bucket: ${path}`);
+          } else {
+            await fileRef.delete();
+            console.log(`Deleted from bucket: ${path}`);
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (err: any) {
           if (err.code === 404) {
             console.warn(`File not found in bucket: ${path}`);
           } else {
+            console.error(`Failed to delete ${path}`, err);
             throw err;
           }
-        });
+        }
       }),
     );
   } catch (error) {

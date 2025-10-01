@@ -39,6 +39,7 @@ import {
   Upload,
   Wand2,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
@@ -790,8 +791,8 @@ const SetupClient = ({
                                 className="truncate max-lg:max-w-100 max-sm:max-w-50"
                                 title={f.name}
                               >
-                                {f.name} ({(f.size / (1024 * 1024)).toFixed(2)}{" "}
-                                MB)
+                                {f.name.substring(0, 50)} (
+                                {(f.size / (1024 * 1024)).toFixed(2)} MB)
                               </span>
                               <Trash2
                                 className="size-4 cursor-pointer text-red-500"
@@ -836,21 +837,21 @@ const SetupClient = ({
                               key={u}
                               className="flex items-center justify-between"
                             >
-                              <a
+                              <Link
                                 href={u}
                                 target="_blank"
-                                rel="noreferrer"
-                                className="truncate"
+                                rel="noopener noreferrer"
+                                className="truncate max-lg:max-w-100 max-sm:max-w-50"
+                                title={u}
                               >
-                                {u}
-                              </a>
-                              <button
-                                type="button"
-                                className="ml-2 text-xs text-red-500"
+                                {u.length > 50
+                                  ? u.substring(0, 30) + "..." + u.slice(-15)
+                                  : u}
+                              </Link>
+                              <Trash2
+                                className="size-4 cursor-pointer text-red-500"
                                 onClick={() => removeUploadedUrl(u)}
-                              >
-                                {t.remove}
-                              </button>
+                              />
                             </li>
                           ))}
                         </ul>
