@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -127,16 +128,113 @@ async function fetchFileWithRetry(
   );
 }
 
-/** Extract text from PDF using pdf-parse */
+/** Extract text from PDF using pdf.js (pdfjs-dist) */
 async function extractTextFromPDF(buffer: Buffer) {
   try {
-    const pdfParse = await import("pdf-parse");
-    const result = await (pdfParse.default ?? pdfParse)(buffer);
+    try {
+      // prefer @napi-rs/canvas; falls back to 'canvas' if you installed that instead
+      const canvasPkg = await import("@napi-rs/canvas");
+      (globalThis as any).createCanvas = canvasPkg.createCanvas;
+      (globalThis as any).ImageData =
+        canvasPkg.ImageData ?? (globalThis as any).ImageData;
+      (globalThis as any).DOMMatrix =
+        canvasPkg.DOMMatrix ?? (globalThis as any).DOMMatrix;
+      (globalThis as any).Path2D =
+        canvasPkg.Path2D ?? (globalThis as any).Path2D;
+    } catch (e) {
+      // If installation fails, we will fall back to light polyfills
+      console.warn(
+        "Canvas native package not available; falling back to lightweight polyfills",
+        e,
+      );
+
+      // Lightweight polyfills for Node (text extraction only)
+      const g = globalThis as any;
+
+      if (!g.DOMMatrix) {
+        // minimal DOMMatrix polyfill — pdfjs only checks existence for some ops
+        g.DOMMatrix = class DOMMatrix {
+          constructor(..._args: any[]) {}
+        };
+      }
+
+      if (!g.ImageData) {
+        g.ImageData = class ImageData {
+          data: Uint8ClampedArray;
+          width: number;
+          height: number;
+          constructor(data: Uint8ClampedArray, width: number, height: number) {
+            this.data = data;
+            this.width = width;
+            this.height = height;
+          }
+        };
+      }
+
+      if (!g.Path2D) {
+        g.Path2D = class Path2D {
+          constructor(_d?: any) {}
+        };
+      }
+    }
+
+    // Import the legacy build for Node usage
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(buffer),
+      useSystemFonts: true,
+    });
+
+    const pdf = await loadingTask.promise;
+    const numPages = pdf.numPages || 0;
+
+    // Process pages in parallel
+    const pagePromises = Array.from({ length: numPages }, (_, idx) =>
+      (async () => {
+        const pageNumber = idx + 1;
+        const page = await pdf.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+
+        // Each item can be different shapes; use a type guard
+        const pageText = textContent.items
+          .map((item: unknown) => {
+            if (!item || typeof item !== "object") return "";
+
+            // recommended: check for 'str' (TextItem) or 'unicode' (alternate)
+            if ("str" in item && typeof (item as any).str === "string") {
+              return (item as any).str;
+            }
+            if (
+              "unicode" in item &&
+              typeof (item as any).unicode === "string"
+            ) {
+              return (item as any).unicode;
+            }
+
+            // fallback: try any common keys that might contain text
+            for (const key of ["str", "unicode", "text"]) {
+              if (key in item && typeof (item as any)[key] === "string") {
+                return (item as any)[key];
+              }
+            }
+
+            return "";
+          })
+          .filter(Boolean)
+          .join(" ");
+
+        return pageText;
+      })(),
+    );
+
+    const pagesText = await Promise.all(pagePromises);
+    const fullText = pagesText.join("\n");
+
     return {
-      text: result.text ?? "",
-      pageCount:
-        typeof result.numpages === "number" ? result.numpages : undefined,
-      errors: result.text ? undefined : ["No text content found in PDF"],
+      text: fullText,
+      pageCount: numPages,
+      errors: fullText ? undefined : ["No text content found in PDF"],
     };
   } catch (err) {
     console.error("PDF parsing failed:", err);
@@ -186,7 +284,7 @@ async function processFileContent(
   } = { text: "" };
 
   if (fileType === "pdf") {
-    extractionMethod = "pdf-parse";
+    extractionMethod = "pdfjs-dist";
     extractionResult = await extractTextFromPDF(buffer);
   } else if (fileType === "word") {
     extractionMethod = "mammoth";
