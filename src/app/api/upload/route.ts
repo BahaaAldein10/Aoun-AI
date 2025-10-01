@@ -36,7 +36,9 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const userId = formData.get("userId") as string | null; // 👈 receive userId from client
-    const kbId = formData.get("kbId") as string | null; // 👈 receive kbId from client
+    const rawKbId = String(formData.get("kbId") ?? "").trim(); // 👈 receive kbId from client
+    const isHex24 = /^[0-9a-fA-F]{24}$/.test(rawKbId);
+    const kbIdForDb = isHex24 ? rawKbId : null;
 
     if (!file || !userId) {
       return NextResponse.json(
@@ -83,7 +85,7 @@ export async function POST(req: Request) {
     const uploadedFile = await prisma.uploadedFile.create({
       data: {
         userId,
-        kbId,
+        kbId: kbIdForDb,
         filename: fileName,
         fileType: file.type,
         size: file.size,
