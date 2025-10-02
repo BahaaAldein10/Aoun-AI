@@ -128,6 +128,20 @@ async function fetchFileWithRetry(
   );
 }
 
+/**
+ * Fix Arabic text encoding issues from PDF extraction
+ * Handles reversed and garbled RTL text
+ */
+function fixArabicText(text: string): string {
+  // Arabic Unicode range: \u0600-\u06FF (Arabic) and \u0750-\u077F (Arabic Supplement)
+  const arabicRegex = /[\u0600-\u06FF\u0750-\u077F]+/g;
+
+  return text.replace(arabicRegex, (match) => {
+    // Reverse the Arabic text segment (PDFs often store it reversed)
+    return match.split("").reverse().join("");
+  });
+}
+
 // Extract text from PDF using pdf2json
 async function extractTextFromPDF(
   buffer: Buffer,
@@ -167,6 +181,9 @@ async function extractTextFromPDF(
                 );
               }).join("\n") || "";
           }
+
+          // Fix Arabic text encoding issues
+          text = fixArabicText(text);
 
           const pageCount = pdfData?.Pages?.length || 0;
 
