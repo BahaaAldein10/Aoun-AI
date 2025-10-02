@@ -174,42 +174,63 @@ async function generateAIResponse(
 
     // Build context from retrieved chunks
     const sourceBlocks = retrieved.map((r, i) => {
-      return `SOURCE ${i + 1}:\n${r.text}`;
+      const srcMeta = r.metadata ?? {};
+      const label = srcMeta.filename || srcMeta.sourceUrl || `source-${i + 1}`;
+      return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // Create prompt with platform-specific instructions
-    const basePersonality =
-      (metadata?.personality as string) ||
-      "You are a helpful assistant. Keep responses concise and friendly for messaging.";
+    // Get personality from KB metadata
+    const personality = (metadata?.personality as string) || "";
 
-    let platformInstructions = "";
-    if (channel === "facebook") {
-      platformInstructions =
-        " Always respond in a conversational tone suitable for Facebook Messenger and Instagram DMs. Keep responses under 300 characters when possible.";
-    } else if (channel === "whatsapp") {
-      platformInstructions =
-        " Always respond in a conversational tone suitable for WhatsApp. Keep responses under 300 characters when possible.";
-    }
+    // Platform-specific character limits
+    const charLimit =
+      channel === "whatsapp" || channel === "facebook" ? 300 : 500;
 
-    const systemInstruction = `${basePersonality}${platformInstructions}`;
+    // IMPROVED SYSTEM INSTRUCTION - matches chat route
+    const systemInstruction =
+      `You are a knowledgeable assistant with direct access to our platform's knowledge base.
+
+CRITICAL INSTRUCTIONS:
+1. Answer questions directly using the information from the SOURCE blocks provided below
+2. DO NOT redirect users with phrases like "you can see it in our platform" or "check [HERE]"
+3. Extract and present the actual information from the sources in your response
+4. Be specific and detailed when answering - the sources contain the information users need
+5. Only say you don't have information if the sources genuinely don't contain relevant details
+6. Synthesize information from multiple sources when appropriate
+7. Present information naturally as if you're explaining it directly, not as if you're reading from a document
+
+MESSAGING-SPECIFIC GUIDELINES:
+- Keep responses under ${charLimit} characters when possible
+- Use a conversational, friendly tone suitable for ${channel === "whatsapp" ? "WhatsApp" : channel === "facebook" ? "Messenger/Instagram DMs" : "messaging"}
+- Break long information into digestible chunks
+- Use simple language and avoid overly formal tone
+
+${personality ? `Additional guidance: ${personality}` : ""}`.trim();
 
     const retrievalText = sourceBlocks.length
-      ? `Use the following information to answer the user's question:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
-      : "";
+      ? `\n\nRetrieved information from knowledge base:\n\n${sourceBlocks.join("\n\n---\n\n")}\n\n`
+      : "\n\nNo specific information was retrieved from the knowledge base for this query.\n\n";
 
-    const prompt = `${systemInstruction}\n\n${retrievalText}User: ${message.trim()}\nAssistant:`;
+    const userBlock = `Current question:\nUser: ${message.trim()}\n\nProvide a direct, informative answer using the retrieved information above:\nAssistant:`;
 
-    // Call OpenAI
+    const fullPrompt = `${systemInstruction}\n\n${retrievalText}${userBlock}`;
+
     const OpenAI = (await import("openai")).default;
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
     const completion = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       messages: [
-        { role: "system", content: systemInstruction + "\n\n" + retrievalText },
-        { role: "user", content: message.trim() },
+        {
+          role: "system",
+          content: systemInstruction + "\n\n" + retrievalText,
+        },
+        {
+          role: "user",
+          content: message.trim(),
+        },
       ],
-      max_tokens: 200,
+      max_tokens: 300,
       temperature: 0.1,
     });
 
@@ -231,13 +252,14 @@ async function generateAIResponse(
       interactions: 1,
       minutes: 0,
       isCorrect,
-      isNegative: false,
+      isNegative: !isCorrect,
       isFallback,
       meta: {
         messageType: "auto_reply",
         retrievedCount: retrieved.length,
-        promptSize: prompt.length,
+        promptSize: fullPrompt.length,
         originalMessage: message,
+        responseLength: responseText.length,
       },
     });
 

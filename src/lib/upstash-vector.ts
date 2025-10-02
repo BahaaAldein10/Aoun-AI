@@ -140,10 +140,10 @@ export class UpstashVectorClient {
   */
   async upsert(vectors: Vector | Vector[]): Promise<UpsertResponse> {
     const vectorArray = Array.isArray(vectors) ? vectors : [vectors];
-    // request body is { vectors: [...] } — keeps the endpoint predictable
+    // Send array directly, not wrapped
     return this.makeRequest<UpsertResponse>("/upsert", {
       method: "POST",
-      body: JSON.stringify({ vectors: vectorArray }),
+      body: JSON.stringify(vectorArray),
     });
   }
 
