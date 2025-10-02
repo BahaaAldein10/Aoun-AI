@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import type { Configuration } from "webpack";
 
 const nextConfig: NextConfig = {
   async headers() {
@@ -14,6 +15,7 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+
   images: {
     remotePatterns: [
       {
@@ -21,6 +23,30 @@ const nextConfig: NextConfig = {
         hostname: "**",
       },
     ],
+  },
+
+  webpack: (config: Configuration, { isServer }) => {
+    if (isServer) {
+      const origExternals = config.externals || [];
+
+      config.externals = [
+        function externalCanvas(
+          context: { request?: string },
+          callback: (err?: Error | null, result?: string) => void,
+        ) {
+          if (
+            context.request &&
+            context.request.startsWith("@napi-rs/canvas")
+          ) {
+            return callback(null, "commonjs " + context.request);
+          }
+          callback();
+        },
+        ...(Array.isArray(origExternals) ? origExternals : [origExternals]),
+      ];
+    }
+
+    return config;
   },
 };
 
