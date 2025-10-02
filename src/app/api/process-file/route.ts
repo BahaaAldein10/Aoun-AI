@@ -128,124 +128,84 @@ async function fetchFileWithRetry(
   );
 }
 
-/** Extract text from PDF using pdf.js (pdfjs-dist)
- *
- * - Tries to load @napi-rs/canvas at runtime (without webpack bundling)
- * - Falls back to lightweight polyfills for DOMMatrix/ImageData/Path2D
- * - Uses chunked page processing to limit concurrency/memory usage
- */
+// Extract text from PDF using pdfjs-dist
 async function extractTextFromPDF(
   buffer: Buffer,
   opts?: { concurrency?: number },
 ): Promise<{ text: string; pageCount?: number; errors?: string[] }> {
-  const concurrency = Math.max(1, opts?.concurrency ?? 8);
+  const concurrency = Math.max(1, opts?.concurrency ?? 4);
 
   try {
-    // --- 1) Try to load native canvas at runtime without bundling it ---
-    let canvasPkg: any = null;
-    try {
-      // Prevent webpack from seeing the require at build-time:
-      const req: NodeJS.Require = eval("require");
-      canvasPkg = req("@napi-rs/canvas");
-    } catch {
-      try {
-        // If runtime dynamic import works, try that (some envs do)
-        const maybe = await import("@napi-rs/canvas");
-        canvasPkg = (maybe as any)?.default ?? maybe;
-      } catch {
-        canvasPkg = null;
-      }
+    const g = globalThis as any;
+    if (!g.DOMMatrix)
+      g.DOMMatrix = class DOMMatrix {
+        constructor(..._args: any[]) {}
+      };
+    if (!g.ImageData) {
+      g.ImageData = class ImageData {
+        data: Uint8ClampedArray;
+        width: number;
+        height: number;
+        constructor(data: Uint8ClampedArray, width: number, height: number) {
+          this.data = data;
+          this.width = width;
+          this.height = height;
+        }
+      };
     }
+    if (!g.Path2D)
+      g.Path2D = class Path2D {
+        constructor(_d?: any) {}
+      };
 
-    if (canvasPkg) {
-      const pkg: any = (canvasPkg?.default ?? canvasPkg) as any;
-      if (pkg.createCanvas) (globalThis as any).createCanvas = pkg.createCanvas;
-      if (pkg.ImageData) (globalThis as any).ImageData = pkg.ImageData;
-      if (pkg.DOMMatrix) (globalThis as any).DOMMatrix = pkg.DOMMatrix;
-      if (pkg.Path2D) (globalThis as any).Path2D = pkg.Path2D;
-      if (pkg.Canvas) (globalThis as any).HTMLCanvasElement = pkg.Canvas;
-      if (pkg.Image) (globalThis as any).Image = pkg.Image;
-    } else {
-      // --- 2) Lightweight polyfills for text extraction only (no native canvas) ---
-      const g = globalThis as any;
-      if (!g.DOMMatrix) {
-        g.DOMMatrix = class DOMMatrix {
-          constructor(..._args: any[]) {}
-        };
-      }
-      if (!g.ImageData) {
-        g.ImageData = class ImageData {
-          data: Uint8ClampedArray;
-          width: number;
-          height: number;
-          constructor(data: Uint8ClampedArray, width: number, height: number) {
-            this.data = data;
-            this.width = width;
-            this.height = height;
-          }
-        };
-      }
-      if (!g.Path2D) {
-        g.Path2D = class Path2D {
-          constructor(_d?: any) {}
-        };
-      }
-    }
-
-    // --- 3) Load pdfjs (legacy Node build) ---
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+    // Use GlobalWorkerOptions to avoid worker setup. Cast to any for non-typed flags.
+    if (pdfjsLib?.GlobalWorkerOptions) {
+      (pdfjsLib.GlobalWorkerOptions as any).workerSrc = "";
+      // set the non-typed flag via cast
+      (pdfjsLib.GlobalWorkerOptions as any).disableWorker = true;
+    }
+
+    // Remove disableWorker here to satisfy TypeScript types
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
-      useSystemFonts: true,
+      disableAutoFetch: true,
     });
 
     const pdf = await loadingTask.promise;
     const numPages = pdf?.numPages ?? 0;
 
-    // --- 4) Helper: extract text for a single page ---
-    async function _extractPageText(pageNo: number) {
+    async function extractPageText(pageNo: number) {
       const page = await pdf.getPage(pageNo);
       const textContent = await page.getTextContent();
-
-      // Map items — safe type guards (TextItem has `str`, older builds may use `unicode`)
       const pageText = (textContent.items ?? [])
-        .map((item: unknown) => {
-          if (!item || typeof item !== "object") return "";
-
-          if ("str" in item && typeof (item as any).str === "string") {
-            return (item as any).str;
-          }
-          if ("unicode" in item && typeof (item as any).unicode === "string") {
-            return (item as any).unicode;
-          }
-          // fallback common keys
-          if ("text" in item && typeof (item as any).text === "string") {
-            return (item as any).text;
-          }
+        .map((it: unknown) => {
+          if (!it || typeof it !== "object") return "";
+          if ("str" in it && typeof (it as any).str === "string")
+            return (it as any).str;
+          if ("unicode" in it && typeof (it as any).unicode === "string")
+            return (it as any).unicode;
+          if ("text" in it && typeof (it as any).text === "string")
+            return (it as any).text;
           return "";
         })
         .filter(Boolean)
         .join(" ");
-
       return pageText;
     }
 
-    // --- 5) Process pages in bounded concurrency batches ---
     const results: string[] = [];
     for (let i = 1; i <= numPages; i += concurrency) {
-      const batchSize = Math.min(concurrency, numPages - i + 1);
-      const batchPromises: Promise<string>[] = new Array(batchSize)
-        .fill(null)
-        .map((_, k) => {
-          const pageNo = i + k;
-          return _extractPageText(pageNo);
-        });
+      const batchCount = Math.min(concurrency, numPages - i + 1);
+      const batchPromises: Promise<string>[] = new Array(batchCount)
+        .fill(0)
+        .map((_, k) => extractPageText(i + k));
       const batchTexts = await Promise.all(batchPromises);
       results.push(...batchTexts);
     }
 
     const fullText = results.join("\n");
-
     return {
       text: fullText,
       pageCount: numPages,
@@ -253,11 +213,8 @@ async function extractTextFromPDF(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("PDF parsing failed:", err);
-    return {
-      text: "",
-      errors: [`PDF parsing failed: ${msg}`],
-    };
+    console.error("PDF parsing failed (text-only):", err);
+    return { text: "", errors: [`PDF parsing failed: ${msg}`] };
   }
 }
 
