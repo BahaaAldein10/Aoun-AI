@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
@@ -10,6 +9,7 @@ import {
 import { Client as QStashClient } from "@upstash/qstash";
 import { verifySignatureAppRouter } from "@upstash/qstash/nextjs";
 import pRetry from "p-retry";
+import PDFParser from "pdf2json";
 
 const qstash = new QStashClient({ token: process.env.QSTASH_TOKEN! });
 
@@ -128,94 +128,82 @@ async function fetchFileWithRetry(
   );
 }
 
-// Extract text from PDF using pdfjs-dist
+// Extract text from PDF using pdf2json
 async function extractTextFromPDF(
   buffer: Buffer,
-  opts?: { concurrency?: number },
 ): Promise<{ text: string; pageCount?: number; errors?: string[] }> {
-  const concurrency = Math.max(1, opts?.concurrency ?? 4);
+  return new Promise((resolve) => {
+    try {
+      const pdfParser = new PDFParser(null, true); // Enable binary mode
 
-  try {
-    const g = globalThis as any;
-    if (!g.DOMMatrix)
-      g.DOMMatrix = class DOMMatrix {
-        constructor(..._args: any[]) {}
-      };
-    if (!g.ImageData) {
-      g.ImageData = class ImageData {
-        data: Uint8ClampedArray;
-        width: number;
-        height: number;
-        constructor(data: Uint8ClampedArray, width: number, height: number) {
-          this.data = data;
-          this.width = width;
-          this.height = height;
+      pdfParser.on("pdfParser_dataError", (err) => {
+        console.error("PDF parsing error:", err);
+        resolve({
+          text: "",
+          errors: [
+            `PDF parsing failed: ${err instanceof Error ? err.message : String(err)}`,
+          ],
+        });
+      });
+
+      pdfParser.on("pdfParser_dataReady", (pdfData) => {
+        try {
+          console.log("[PDF Debug] Data ready, pages:", pdfData?.Pages?.length);
+
+          // Extract text from all pages
+          let text = pdfParser.getRawTextContent();
+
+          // If getRawTextContent returns empty, try alternative extraction
+          if (!text || text.trim().length === 0) {
+            console.log(
+              "[PDF Debug] getRawTextContent empty, trying alternative method",
+            );
+            text =
+              pdfData?.Pages?.map((page) => {
+                return (
+                  page.Texts?.map((textItem) => {
+                    return decodeURIComponent(textItem.R?.[0]?.T || "");
+                  }).join(" ") || ""
+                );
+              }).join("\n") || "";
+          }
+
+          const pageCount = pdfData?.Pages?.length || 0;
+
+          console.log("[PDF Debug] Extracted text length:", text.length);
+          console.log("[PDF Debug] First 200 chars:", text.substring(0, 200));
+
+          resolve({
+            text: text || "",
+            pageCount,
+            errors:
+              text && text.trim().length > 0
+                ? undefined
+                : ["No text content found in PDF"],
+          });
+        } catch (err) {
+          console.error("[PDF Debug] Error in dataReady handler:", err);
+          resolve({
+            text: "",
+            errors: [
+              `Failed to extract text: ${err instanceof Error ? err.message : String(err)}`,
+            ],
+          });
         }
-      };
+      });
+
+      // Parse the buffer
+      console.log("[PDF Debug] Starting parse, buffer size:", buffer.length);
+      pdfParser.parseBuffer(buffer);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("PDF parsing initialization failed:", err);
+      resolve({
+        text: "",
+        errors: [`PDF parsing failed: ${msg}`],
+      });
     }
-    if (!g.Path2D)
-      g.Path2D = class Path2D {
-        constructor(_d?: any) {}
-      };
-
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-    // Use GlobalWorkerOptions to avoid worker setup. Cast to any for non-typed flags.
-    if (pdfjsLib?.GlobalWorkerOptions) {
-      (pdfjsLib.GlobalWorkerOptions as any).workerSrc = "";
-      // set the non-typed flag via cast
-      (pdfjsLib.GlobalWorkerOptions as any).disableWorker = true;
-    }
-
-    // Remove disableWorker here to satisfy TypeScript types
-    const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(buffer),
-      disableAutoFetch: true,
-    });
-
-    const pdf = await loadingTask.promise;
-    const numPages = pdf?.numPages ?? 0;
-
-    async function extractPageText(pageNo: number) {
-      const page = await pdf.getPage(pageNo);
-      const textContent = await page.getTextContent();
-      const pageText = (textContent.items ?? [])
-        .map((it: unknown) => {
-          if (!it || typeof it !== "object") return "";
-          if ("str" in it && typeof (it as any).str === "string")
-            return (it as any).str;
-          if ("unicode" in it && typeof (it as any).unicode === "string")
-            return (it as any).unicode;
-          if ("text" in it && typeof (it as any).text === "string")
-            return (it as any).text;
-          return "";
-        })
-        .filter(Boolean)
-        .join(" ");
-      return pageText;
-    }
-
-    const results: string[] = [];
-    for (let i = 1; i <= numPages; i += concurrency) {
-      const batchCount = Math.min(concurrency, numPages - i + 1);
-      const batchPromises: Promise<string>[] = new Array(batchCount)
-        .fill(0)
-        .map((_, k) => extractPageText(i + k));
-      const batchTexts = await Promise.all(batchPromises);
-      results.push(...batchTexts);
-    }
-
-    const fullText = results.join("\n");
-    return {
-      text: fullText,
-      pageCount: numPages,
-      errors: fullText ? undefined : ["No text content found in PDF"],
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("PDF parsing failed (text-only):", err);
-    return { text: "", errors: [`PDF parsing failed: ${msg}`] };
-  }
+  });
 }
 
 /** Extract text from Word (.docx) using mammoth */
@@ -255,7 +243,7 @@ async function processFileContent(
   } = { text: "" };
 
   if (fileType === "pdf") {
-    extractionMethod = "pdfjs-dist";
+    extractionMethod = "pdf2json";
     extractionResult = await extractTextFromPDF(buffer);
   } else if (fileType === "word") {
     extractionMethod = "mammoth";
