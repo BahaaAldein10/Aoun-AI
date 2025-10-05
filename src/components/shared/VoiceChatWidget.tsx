@@ -15,9 +15,16 @@ import {
   Play,
   Send,
   Trash2,
+  Volume2,
   X,
 } from "lucide-react";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Spinner from "./Spinner";
 
 const DEMO_KB_ID = process.env.NEXT_PUBLIC_DEMO_KB_ID;
@@ -61,6 +68,10 @@ export default function VoiceChatWidget({
   const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [userSpeaking, setUserSpeaking] = useState(false);
+  const [botSpeaking, setBotSpeaking] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [prewarmedSession, setPrewarmedSession] = useState<any | null>(null);
 
   const [mode] = useState<"text" | "voice">(initialMode);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -72,6 +83,7 @@ export default function VoiceChatWidget({
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const processingTimeoutRef = useRef<number | null>(null);
+  const audioLevelRafRef = useRef<number | null>(null);
 
   // WebRTC refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -85,6 +97,14 @@ export default function VoiceChatWidget({
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
   const isRtl = lang === "ar";
+
+  // Memoized values for performance
+  const hasMessages = useMemo(() => messages.length > 1, [messages.length]);
+  const isInCall = useMemo(() => recording, [recording]);
+  const pendingStatus = useMemo(
+    () => isTyping || voicePending,
+    [isTyping, voicePending],
+  );
 
   // Initialize with welcome message
   useEffect(() => {
@@ -111,14 +131,32 @@ export default function VoiceChatWidget({
     }
   }, [mode]);
 
-  // Auto scroll messages
+  useEffect(() => {
+    if (mode === "voice" && permission === true && !prewarmedSession) {
+      // Pre-fetch session token in background
+      fetchEphemeralSession()
+        .then(setPrewarmedSession)
+        .catch((err) => console.warn("Session pre-warm failed:", err));
+    }
+  }, [mode, permission, prewarmedSession]);
+
   useEffect(() => {
     if (!listRef.current) return;
     const scrollElement = listRef.current;
-    scrollElement.scrollTo({
-      top: scrollElement.scrollHeight,
-      behavior: "smooth",
-    });
+    const isNearBottom =
+      scrollElement.scrollHeight -
+        scrollElement.scrollTop -
+        scrollElement.clientHeight <
+      100;
+
+    if (isNearBottom) {
+      requestAnimationFrame(() => {
+        scrollElement.scrollTo({
+          top: scrollElement.scrollHeight,
+          behavior: "smooth",
+        });
+      });
+    }
   }, [messages]);
 
   // Recording timer
@@ -147,6 +185,9 @@ export default function VoiceChatWidget({
   useEffect(() => {
     return () => {
       stopCall();
+      if (audioLevelRafRef.current) {
+        cancelAnimationFrame(audioLevelRafRef.current);
+      }
       if (
         audioContextRef.current &&
         audioContextRef.current.state !== "closed"
@@ -236,7 +277,6 @@ export default function VoiceChatWidget({
       };
       pushMessage(botMsg);
 
-      // FIXED: Only generate TTS in voice mode
       if (mode === "voice") {
         generateTTS(reply, botMsg.id);
       }
@@ -357,10 +397,74 @@ export default function VoiceChatWidget({
     }
   };
 
-  const pending = isTyping || voicePending;
+  // Optimized audio level monitoring with speaking detection
+  const startAudioLevelMonitoring = useCallback(() => {
+    const SPEAKING_THRESHOLD = 0.02;
+    const SILENCE_FRAMES = 15;
+    let silenceCounter = 0;
+    let speakingFrames = 0;
+    const SPEAKING_FRAMES_REQUIRED = 2;
+    let lastSpeakingState = false;
+
+    const updateLevel = () => {
+      if (!analyserRef.current || !recording) {
+        setAudioLevel(0);
+        setUserSpeaking(false);
+        if (audioLevelRafRef.current) {
+          cancelAnimationFrame(audioLevelRafRef.current);
+          audioLevelRafRef.current = null;
+        }
+        return;
+      }
+
+      const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+      analyserRef.current.getByteFrequencyData(data);
+      const avg = data.reduce((s, v) => s + v, 0) / data.length / 255;
+
+      setAudioLevel(avg);
+
+      // Determine speaking state
+      let currentlySpeaking = false;
+
+      if (avg > SPEAKING_THRESHOLD) {
+        speakingFrames++;
+        silenceCounter = 0;
+
+        if (speakingFrames >= SPEAKING_FRAMES_REQUIRED) {
+          currentlySpeaking = true;
+        }
+      } else {
+        speakingFrames = 0;
+        silenceCounter++;
+
+        if (silenceCounter > SILENCE_FRAMES) {
+          currentlySpeaking = false;
+        } else {
+          // Keep previous state during silence countdown
+          currentlySpeaking = lastSpeakingState;
+        }
+      }
+
+      // Only update state if it changed to reduce re-renders
+      if (currentlySpeaking !== lastSpeakingState) {
+        console.log("🎤 User speaking state changed:", currentlySpeaking);
+        setUserSpeaking(currentlySpeaking);
+        lastSpeakingState = currentlySpeaking;
+      }
+
+      audioLevelRafRef.current = requestAnimationFrame(updateLevel);
+    };
+
+    // Cancel any existing animation frame before starting new one
+    if (audioLevelRafRef.current) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+    }
+
+    updateLevel();
+  }, [recording]);
 
   // WebRTC functions
-  const fetchEphemeralSession = async () => {
+  const fetchEphemeralSession = useCallback(async () => {
     const resp = await fetch("/api/realtime/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -382,7 +486,7 @@ export default function VoiceChatWidget({
     const json = await resp.json();
     ephemeralSessionRef.current = json;
     return json;
-  };
+  }, []);
 
   function waitForIceGatheringComplete(
     pc: RTCPeerConnection,
@@ -437,12 +541,7 @@ export default function VoiceChatWidget({
     };
 
     pc.ontrack = (ev) => {
-      console.log("ontrack event:", {
-        streamCount: ev.streams.length,
-        trackKind: ev.track.kind,
-        trackReadyState: ev.track.readyState,
-        streamId: ev.streams[0]?.id,
-      });
+      console.log("ontrack event received");
 
       const [remoteStream] = ev.streams;
       if (!remoteStream) {
@@ -458,41 +557,11 @@ export default function VoiceChatWidget({
         audioEl.volume = 1.0;
         audioElRef.current = audioEl;
 
-        audioEl.onloadstart = () => console.log("Audio load started");
-        audioEl.oncanplay = () => console.log("Audio can play");
-        audioEl.onplay = () => console.log("Audio started playing");
-        audioEl.onplaying = () => console.log("Audio is playing");
-        audioEl.onpause = () => console.log("Audio paused");
-        audioEl.onended = () => console.log("Audio ended");
-        audioEl.onwaiting = () => console.log("Audio waiting for data");
-        audioEl.onstalled = () => console.log("Audio stalled");
-        audioEl.onerror = (error) => {
-          console.error("Audio error:", error);
-          console.error("Audio error details:", audioEl?.error);
-        };
-        audioEl.onvolumechange = () => {
-          console.log("Audio volume changed to:", audioEl?.volume);
-        };
+        audioEl.onplay = () => console.log("Remote audio playing");
+        audioEl.onended = () => console.log("Remote audio ended");
       }
 
       try {
-        const audioTracks = remoteStream.getAudioTracks();
-        console.log("Remote stream audio tracks:", {
-          count: audioTracks.length,
-          tracks: audioTracks.map((track) => ({
-            id: track.id,
-            kind: track.kind,
-            enabled: track.enabled,
-            muted: track.muted,
-            readyState: track.readyState,
-          })),
-        });
-
-        if (audioTracks.length === 0) {
-          console.warn("No audio tracks in remote stream");
-          return;
-        }
-
         audioEl.srcObject = remoteStream;
 
         const playPromise = audioEl.play();
@@ -529,45 +598,6 @@ export default function VoiceChatWidget({
 
     dc.onopen = () => {
       console.debug("data channel open");
-      try {
-        dc.send(
-          JSON.stringify({
-            type: "session.update",
-            session: {
-              instructions: `You are a helpful AI assistant with access to a knowledge base about our platform. When users ask questions, use the search_knowledge_base function to find relevant information before responding. Always ground your answers in the retrieved information and be conversational and natural.`,
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.5,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 500,
-                create_response: true,
-              },
-              tools: [
-                {
-                  type: "function",
-                  name: "search_knowledge_base",
-                  description:
-                    "Search the knowledge base for relevant information to answer the user's question",
-                  parameters: {
-                    type: "object",
-                    properties: {
-                      query: {
-                        type: "string",
-                        description:
-                          "The search query to find relevant information",
-                      },
-                    },
-                    required: ["query"],
-                  },
-                },
-              ],
-              tool_choice: "auto",
-            },
-          }),
-        );
-      } catch (err) {
-        console.warn("Failed to send initial session config:", err);
-      }
     };
 
     dc.onmessage = async (ev) => {
@@ -581,56 +611,122 @@ export default function VoiceChatWidget({
             break;
 
           case "input_audio_buffer.speech_started":
-            console.log("User started speaking");
+            console.log("🎤 User started speaking (VAD detected)");
             setIsProcessing(true);
-            // Clear any existing timeout
+            setUserSpeaking(true);
             if (processingTimeoutRef.current) {
               clearTimeout(processingTimeoutRef.current);
             }
             break;
 
           case "input_audio_buffer.speech_stopped":
-            console.log("User stopped speaking - waiting for response");
-            // Set a timeout for response (30 seconds)
+            console.log("🎤 User stopped speaking (VAD detected)");
+            setIsProcessing(true);
+            setUserSpeaking(false);
+            break;
+
+          case "response.text.delta":
+            console.log("Text delta (model thinking):", payload.delta);
+            break;
+
+          case "response.function_call_arguments.delta":
+            console.log("Building function call...");
+            setIsProcessing(true);
+            break;
+
+          case "response.output_item.added":
+            console.log("Output item added:", {
+              type: payload.item?.type,
+              content: payload.item,
+            });
+            if (payload.item?.type === "function_call") {
+              console.log("✓ Function call will be made:", payload.item.name);
+            }
+            break;
+
+          case "conversation.item.created":
+            if (
+              payload.item?.type === "message" &&
+              payload.item?.role === "user"
+            ) {
+              console.log("User message created:", payload.item);
+              // Add to message history
+              if (payload.item?.content?.[0]?.transcript) {
+                pushMessage({
+                  id: `u-voice-${Date.now()}`,
+                  role: "user",
+                  text: payload.item.content[0].transcript,
+                  createdAt: new Date().toISOString(),
+                  isVoice: true,
+                });
+              }
+            } else if (
+              payload.item?.type === "message" &&
+              payload.item?.role === "assistant"
+            ) {
+              console.log("Assistant message created:", payload.item);
+              // Add assistant response to history
+              if (payload.item?.content?.[0]?.transcript) {
+                pushMessage({
+                  id: `b-voice-${Date.now()}`,
+                  role: "bot",
+                  text: payload.item.content[0].transcript,
+                  createdAt: new Date().toISOString(),
+                  isVoice: true,
+                });
+              }
+            }
+            break;
+
+          case "response.created":
             processingTimeoutRef.current = window.setTimeout(() => {
               console.warn("Response timeout - no response received");
               setIsProcessing(false);
-              pushMessage({
-                id: `timeout-${Date.now()}`,
-                role: "bot",
-                text:
-                  lang === "en"
-                    ? "Sorry, I didn't catch that. Could you try again?"
-                    : "عذراً، لم أسمع ذلك. هل يمكنك المحاولة مرة أخرى؟",
-                createdAt: new Date().toISOString(),
-                isVoice: true,
-              });
-            }, 30000);
+              setBotSpeaking(false);
+            }, 15000);
             break;
 
-          case "response.function_call_done":
+          case "response.audio_transcript.delta":
+            console.log("Bot is speaking (transcript delta)");
+            setBotSpeaking(true);
+            break;
+
+          case "response.audio.delta":
+            console.log("🟢 Bot audio delta - speaking ON");
+            setBotSpeaking(true);
+            break;
+
+          case "response.function_call_arguments.done":
+            console.log("Function arguments completed:", payload);
+
             if (payload.name === "search_knowledge_base") {
               try {
                 const searchArgs = JSON.parse(payload.arguments);
                 const searchQuery = searchArgs.query;
 
-                // Add timeout to KB search
-                const searchPromise = fetch("/api/realtime/search", {
+                console.log("Executing KB search for:", searchQuery);
+                setIsProcessing(true);
+
+                const searchResponse = await fetch("/api/realtime/search", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     kbId: DEMO_KB_ID,
                     query: searchQuery,
-                    topK: 3,
+                    topK: 5,
                     isDemo: true,
                   }),
-                  signal: AbortSignal.timeout(10000), // 10 second timeout
+                  signal: AbortSignal.timeout(8000),
                 });
 
-                const searchResponse = await searchPromise;
                 const searchData = await searchResponse.json();
+                console.log("Search completed:", searchData);
 
-                if (searchResponse.ok && searchData.success) {
+                if (
+                  searchResponse.ok &&
+                  searchData.success &&
+                  searchData.contextText
+                ) {
                   const functionResult = {
                     type: "conversation.item.create",
                     item: {
@@ -644,55 +740,83 @@ export default function VoiceChatWidget({
                     },
                   };
                   dc.send(JSON.stringify(functionResult));
-                  dc.send(JSON.stringify({ type: "response.create" }));
+
+                  // CRITICAL: Tell it to respond with text, not call more functions
+                  dc.send(
+                    JSON.stringify({
+                      type: "response.create",
+                      response: {
+                        modalities: ["text", "audio"],
+                        instructions:
+                          "Now answer the user's question using ONLY the search results provided. Do not call any more functions.",
+                      },
+                    }),
+                  );
+
+                  console.log("Sent search results back to model");
                 } else {
-                  const errorResult = {
+                  const noResultsOutput = {
                     type: "conversation.item.create",
                     item: {
                       type: "function_call_output",
                       call_id: payload.call_id,
                       output: JSON.stringify({
-                        error: "Failed to search knowledge base",
                         contextText:
-                          "I'm having trouble accessing the information right now. Let me try to help anyway.",
+                          "No information found in knowledge base for this query.",
+                        sources: [],
+                        totalResults: 0,
                       }),
                     },
                   };
-                  dc.send(JSON.stringify(errorResult));
-                  dc.send(JSON.stringify({ type: "response.create" }));
+                  dc.send(JSON.stringify(noResultsOutput));
+                  dc.send(
+                    JSON.stringify({
+                      type: "response.create",
+                      response: {
+                        modalities: ["text", "audio"],
+                      },
+                    }),
+                  );
                 }
               } catch (searchError) {
-                console.error("KB search error:", searchError);
-
-                // Check if it's a timeout
-                const isTimeout =
-                  searchError instanceof Error &&
-                  (searchError.name === "AbortError" ||
-                    searchError.message.includes("timeout"));
-
-                const errorResult = {
+                console.error("Search failed:", searchError);
+                const errorOutput = {
                   type: "conversation.item.create",
                   item: {
                     type: "function_call_output",
                     call_id: payload.call_id,
                     output: JSON.stringify({
-                      error: isTimeout ? "Search timeout" : "Search failed",
-                      contextText: isTimeout
-                        ? "The search is taking too long. Let me give you a general answer."
-                        : "I'm having trouble searching right now. Let me help you anyway.",
+                      contextText: "Search unavailable.",
                     }),
                   },
                 };
-                dc.send(JSON.stringify(errorResult));
+                dc.send(JSON.stringify(errorOutput));
                 dc.send(JSON.stringify({ type: "response.create" }));
+              } finally {
+                setIsProcessing(false);
               }
             }
             break;
 
+          case "response.function_call_done":
+            // This might not fire - keeping as fallback
+            console.log("Function call done (fallback):", payload);
+            break;
+
           case "response.audio.done":
+            // Audio generation complete
+            console.log("🔴 Bot audio done - speaking OFF");
+            setBotSpeaking(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
+            break;
+
           case "response.done":
-            // Clear processing state when response completes
+            console.log("Response fully complete");
             setIsProcessing(false);
+            setBotSpeaking(false);
             if (processingTimeoutRef.current) {
               clearTimeout(processingTimeoutRef.current);
               processingTimeoutRef.current = null;
@@ -702,6 +826,7 @@ export default function VoiceChatWidget({
           case "error":
             console.error("Realtime API error:", payload);
             setIsProcessing(false);
+            setBotSpeaking(false);
             if (processingTimeoutRef.current) {
               clearTimeout(processingTimeoutRef.current);
               processingTimeoutRef.current = null;
@@ -729,11 +854,13 @@ export default function VoiceChatWidget({
     dc.onerror = (error) => {
       console.error("Data channel error:", error);
       setIsProcessing(false);
+      setBotSpeaking(false);
     };
 
     dc.onclose = () => {
       console.debug("Data channel closed");
       setIsProcessing(false);
+      setBotSpeaking(false);
       if (processingTimeoutRef.current) {
         clearTimeout(processingTimeoutRef.current);
         processingTimeoutRef.current = null;
@@ -752,7 +879,9 @@ export default function VoiceChatWidget({
     try {
       setVoicePending(true);
 
-      const session = await fetchEphemeralSession();
+      const session = prewarmedSession || (await fetchEphemeralSession());
+      setPrewarmedSession(null);
+
       const ephemeralToken =
         session?.client_secret?.value ?? session?.client_secret;
 
@@ -765,7 +894,7 @@ export default function VoiceChatWidget({
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 24000,
+          sampleRate: 16000,
           channelCount: 1,
         },
       });
@@ -783,18 +912,6 @@ export default function VoiceChatWidget({
       micSourceRef.current = source;
       source.connect(analyser);
 
-      const updateLevel = () => {
-        if (!analyserRef.current) return;
-        const data = new Uint8Array(analyserRef.current.frequencyBinCount);
-        analyserRef.current.getByteFrequencyData(data);
-        const avg = data.reduce((s, v) => s + v, 0) / data.length;
-        setAudioLevel(avg / 255);
-        if (recording) {
-          requestAnimationFrame(updateLevel);
-        }
-      };
-      updateLevel();
-
       const pc = createPeerConnection();
       pcRef.current = pc;
 
@@ -808,7 +925,7 @@ export default function VoiceChatWidget({
       await pc.setLocalDescription(offer);
 
       console.log("Waiting for ICE gathering...");
-      await waitForIceGatheringComplete(pc, 5000);
+      await waitForIceGatheringComplete(pc, 2000);
 
       const finalOffer = pc.localDescription?.sdp;
       if (!finalOffer) {
@@ -844,6 +961,7 @@ export default function VoiceChatWidget({
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
 
       setRecording(true);
+      startAudioLevelMonitoring();
 
       pushMessage({
         id: `session-start-${Date.now()}`,
@@ -876,19 +994,24 @@ export default function VoiceChatWidget({
   };
 
   const startCall = async () => {
-    // Check if terms have been accepted
     if (!termsAccepted) {
       setShowTermsModal(true);
       return;
     }
-
-    // If terms are already accepted, proceed with the call
     await initiateCall();
   };
 
   const stopCall = () => {
     setRecording(false);
     setAudioLevel(0);
+    setUserSpeaking(false);
+    setBotSpeaking(false);
+    setPrewarmedSession(null);
+
+    if (audioLevelRafRef.current) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+      audioLevelRafRef.current = null;
+    }
 
     try {
       if (localStreamRef.current) {
@@ -950,7 +1073,6 @@ export default function VoiceChatWidget({
   const handleAcceptTerms = async () => {
     setTermsAccepted(true);
     setShowTermsModal(false);
-    // Now actually start the call using the extracted logic
     await initiateCall();
   };
 
@@ -958,15 +1080,41 @@ export default function VoiceChatWidget({
     setShowTermsModal(false);
   };
 
-  const isInCall = recording;
-  const pendingStatus = isTyping || voicePending;
+  // Speaking Indicator Component
+  const SpeakingIndicator = ({
+    active,
+    color = "blue",
+  }: {
+    active: boolean;
+    color?: string;
+  }) => (
+    <div className="flex items-center gap-1">
+      {[...Array(4)].map((_, i) => (
+        <div
+          key={i}
+          className={cn(
+            "w-1 rounded-full transition-all duration-200",
+            active
+              ? color === "blue"
+                ? "animate-pulse bg-blue-500"
+                : "animate-pulse bg-green-500"
+              : "bg-gray-300 dark:bg-gray-700",
+          )}
+          style={{
+            height: active ? `${8 + Math.random() * 8}px` : "8px",
+            animationDelay: `${i * 0.1}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <div
       className={cn("flex h-full min-h-0 flex-col", isRtl && "rtl", className)}
       dir={isRtl ? "rtl" : "ltr"}
     >
-      {/* Terms and Conditions Modal */}
+      {/* Terms Modal */}
       {showTermsModal && (
         <div className="bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center bg-black">
           <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl dark:bg-gray-900">
@@ -1092,24 +1240,42 @@ export default function VoiceChatWidget({
                   ? "Chat Assistant"
                   : "مساعد الدردشة"}
             </h3>
-            <p className="text-muted-foreground text-xs">
-              {isInCall
-                ? lang === "en"
-                  ? `In call • ${formatTime(recordingTime)}`
-                  : `في المكالمة • ${formatTime(recordingTime)}`
-                : pendingStatus
+            <div className="flex items-center gap-2">
+              <p className="text-muted-foreground text-xs">
+                {isInCall
                   ? lang === "en"
-                    ? "Processing..."
-                    : "جاري المعالجة..."
-                  : lang === "en"
-                    ? "Ready"
-                    : "جاهز"}
-            </p>
+                    ? `In call • ${formatTime(recordingTime)}`
+                    : `في المكالمة • ${formatTime(recordingTime)}`
+                  : pendingStatus
+                    ? lang === "en"
+                      ? "Processing..."
+                      : "جاري المعالجة..."
+                    : lang === "en"
+                      ? "Ready"
+                      : "جاهز"}
+              </p>
+              {isInCall && (
+                <>
+                  {userSpeaking && (
+                    <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                      <Mic className="h-3 w-3" />
+                      <SpeakingIndicator active={true} color="blue" />
+                    </div>
+                  )}
+                  {botSpeaking && (
+                    <div className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                      <Volume2 className="h-3 w-3" />
+                      <SpeakingIndicator active={true} color="green" />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {messages.length > 1 && (
+          {hasMessages && (
             <Button
               variant="ghost"
               size="icon"
@@ -1137,7 +1303,7 @@ export default function VoiceChatWidget({
 
       {/* Messages */}
       <div ref={listRef} className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-        {messages.length <= 1 ? (
+        {!hasMessages ? (
           <div className="flex h-full flex-col items-center justify-center space-y-3 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/20 dark:to-purple-900/20">
               {mode === "voice" ? (
@@ -1164,23 +1330,41 @@ export default function VoiceChatWidget({
             </div>
 
             {isInCall && (
-              <div className="mt-4 flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                  {[...Array(5)].map((_, i) => (
-                    <div
-                      key={i}
-                      className={cn(
-                        "h-2 w-3 rounded-md transition-all",
-                        audioLevel * 5 > i
-                          ? "scale-y-110 bg-green-500"
-                          : "bg-gray-300",
-                      )}
-                    />
-                  ))}
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="flex items-center gap-1">
+                    {[...Array(5)].map((_, i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          "h-2 w-3 rounded-md transition-all",
+                          audioLevel * 5 > i
+                            ? "scale-y-110 bg-green-500"
+                            : "bg-gray-300 dark:bg-gray-700",
+                        )}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-muted-foreground text-xs">
+                    {userSpeaking
+                      ? lang === "en"
+                        ? "Speaking..."
+                        : "يتحدث..."
+                      : lang === "en"
+                        ? "Listening..."
+                        : "يستمع..."}
+                  </span>
                 </div>
-                <span className="text-muted-foreground text-xs">
-                  {lang === "en" ? "In call" : "في المكالمة"}
-                </span>
+                {botSpeaking && (
+                  <div className="flex items-center justify-center gap-2 text-green-600 dark:text-green-400">
+                    <Volume2 className="h-4 w-4" />
+                    <span className="text-xs">
+                      {lang === "en"
+                        ? "Assistant speaking..."
+                        : "المساعد يتحدث..."}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1335,48 +1519,131 @@ export default function VoiceChatWidget({
               </div>
             )}
 
-            <div className="flex items-center justify-center">
-              {!isInCall ? (
-                <Button
-                  onClick={startCall}
-                  disabled={voicePending || permission === false}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "shadow-lg hover:scale-105 hover:shadow-xl",
-                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
-                    "bg-gradient-to-br from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
-                  )}
-                  title={
-                    lang === "en" ? "Start voice call" : "ابدأ المكالمة الصوتية"
-                  }
-                >
-                  <Phone className="h-8 w-8 text-white" />
-                </Button>
-              ) : (
-                <Button
-                  onClick={stopCall}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
-                    "shadow-lg hover:shadow-xl",
-                  )}
-                  title={lang === "en" ? "End call" : "إنهاء المكالمة"}
-                >
-                  <PhoneOff className="h-8 w-8 text-white" />
-                </Button>
-              )}
-            </div>
+            <div className="space-y-3">
+              {/* Voice Status Indicators */}
+              {isInCall && (
+                <div className="flex items-center justify-center gap-4">
+                  {/* User Speaking Status */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-full px-4 py-2 transition-all duration-300",
+                      userSpeaking
+                        ? "bg-blue-100 dark:bg-blue-900/30"
+                        : "bg-gray-100 dark:bg-gray-800",
+                    )}
+                  >
+                    <Mic
+                      className={cn(
+                        "h-4 w-4 transition-colors",
+                        userSpeaking ? "text-blue-600" : "text-gray-400",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        userSpeaking
+                          ? "text-blue-700 dark:text-blue-300"
+                          : "text-gray-500",
+                      )}
+                    >
+                      {lang === "en" ? "You" : "أنت"}
+                    </span>
+                    <SpeakingIndicator active={userSpeaking} color="blue" />
+                  </div>
 
-            <div className="mt-3 text-center">
-              <p className="text-muted-foreground text-xs">
-                {isInCall
-                  ? lang === "en"
-                    ? "Speak naturally — the assistant will reply automatically"
-                    : "تحدث بطبيعية — سيقوم المساعد بالرد تلقائيًا"
-                  : lang === "en"
-                    ? "Tap to start a real-time voice conversation"
-                    : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
-              </p>
+                  {/* Bot Speaking Status */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-full px-4 py-2 transition-all duration-300",
+                      botSpeaking
+                        ? "bg-green-100 dark:bg-green-900/30"
+                        : "bg-gray-100 dark:bg-gray-800",
+                    )}
+                  >
+                    <Volume2
+                      className={cn(
+                        "h-4 w-4 transition-colors",
+                        botSpeaking ? "text-green-600" : "text-gray-400",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        botSpeaking
+                          ? "text-green-700 dark:text-green-300"
+                          : "text-gray-500",
+                      )}
+                    >
+                      {lang === "en" ? "Assistant" : "المساعد"}
+                    </span>
+                    <SpeakingIndicator active={botSpeaking} color="green" />
+                  </div>
+                </div>
+              )}
+
+              {/* Call Button */}
+              <div className="flex items-center justify-center">
+                {!isInCall ? (
+                  <Button
+                    onClick={startCall}
+                    disabled={voicePending || permission === false}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "shadow-lg hover:scale-105 hover:shadow-xl",
+                      "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+                      "bg-gradient-to-br from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
+                    )}
+                    title={
+                      lang === "en"
+                        ? "Start voice call"
+                        : "ابدأ المكالمة الصوتية"
+                    }
+                  >
+                    {voicePending ? (
+                      <Loader className="h-8 w-8 animate-spin text-white" />
+                    ) : (
+                      <Phone className="h-8 w-8 text-white" />
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={stopCall}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
+                      "shadow-lg hover:shadow-xl",
+                    )}
+                    title={lang === "en" ? "End call" : "إنهاء المكالمة"}
+                  >
+                    <PhoneOff className="h-8 w-8 text-white" />
+                  </Button>
+                )}
+              </div>
+
+              {/* Status Text */}
+              <div className="text-center">
+                <p className="text-muted-foreground text-xs">
+                  {isInCall
+                    ? isProcessing
+                      ? lang === "en"
+                        ? "Processing your message..."
+                        : "معالجة رسالتك..."
+                      : userSpeaking
+                        ? lang === "en"
+                          ? "Listening to you..."
+                          : "يستمع إليك..."
+                        : botSpeaking
+                          ? lang === "en"
+                            ? "Assistant is responding..."
+                            : "المساعد يستجيب..."
+                          : lang === "en"
+                            ? "Speak naturally — I'm listening"
+                            : "تحدث بطبيعية — أنا أستمع"
+                    : lang === "en"
+                      ? "Tap to start a real-time voice conversation"
+                      : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
+                </p>
+              </div>
             </div>
           </>
         )}

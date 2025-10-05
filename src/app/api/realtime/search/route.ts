@@ -1,15 +1,19 @@
 // src/app/api/realtime/search/route.ts
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { createEmbeddings } from "@/lib/embedding-service";
+import { prisma } from "@/lib/prisma";
 import upstashVector from "@/lib/upstash-vector";
 import { upstashSearchSimilar } from "@/search/upstash-search";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
 const DEFAULT_TOP_K = 5;
 const MAX_TOP_K = 8;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const searchCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 30000;
 
 type ChunkMetadata = {
   documentId?: string;
@@ -138,6 +142,14 @@ export async function POST(req: Request) {
       });
     }
 
+    const cacheKey = `${kbId}:${query}:${searchTopK}`;
+    const cached = searchCache.get(cacheKey);
+
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log("Cache hit for:", cacheKey);
+      return NextResponse.json(cached.data);
+    }
+
     // Regular KB handling (non-demo)
     // Validate KB exists
     const kb = await prisma.knowledgeBase.findUnique({
@@ -232,7 +244,7 @@ export async function POST(req: Request) {
           .join("\n\n---\n\n")
       : "No relevant information found in the knowledge base for this query.";
 
-    return NextResponse.json({
+    const responseData = {
       success: true,
       query,
       kbId,
@@ -240,7 +252,12 @@ export async function POST(req: Request) {
       contextText,
       totalResults: retrieved.length,
       isDemo: false,
-    });
+    };
+
+    // Cache the response
+    searchCache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+
+    return NextResponse.json(responseData);
   } catch (err) {
     console.error("Realtime search error:", err);
     return NextResponse.json(

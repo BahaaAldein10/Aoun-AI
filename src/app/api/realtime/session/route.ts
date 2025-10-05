@@ -52,27 +52,25 @@ export async function POST(req: Request) {
         voice: voice || demoKbData.metadata?.voice || "alloy",
         modalities: ["text", "audio"],
         instructions:
-          `You are a knowledgeable voice assistant with direct access to our platform's knowledge base.
+          `You are a voice assistant that MUST use the search_knowledge_base function for every user question.
 
-CRITICAL INSTRUCTIONS:
-1. Answer questions directly using information from the search_knowledge_base function results
-2. DO NOT redirect users with phrases like "you can check the platform" or "see our website"
-3. Extract and present the actual information from search results in your responses
-4. Be conversational, natural, and concise in voice format
-5. Only say you don't have information if search results genuinely don't contain relevant details
-6. Synthesize information from multiple sources when appropriate
-7. Present information as if you're explaining it directly, not reading from a document
+MANDATORY WORKFLOW:
+1. User asks a question → IMMEDIATELY call search_knowledge_base with their query
+2. Receive search results → Answer based ONLY on those results
+3. No results found → Say "I don't have information about that in my knowledge base"
+4. NEVER answer without calling search_knowledge_base first
+5. Keep responses to 2-3 sentences for voice conversation
 
-${demoKbData.metadata?.personality || ""}
+You have NO general knowledge - you can ONLY answer using search_knowledge_base results.
 
-Keep responses brief and natural for voice conversation.`.trim(),
+${demoKbData.metadata?.personality || ""}`.trim(),
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
+          prefix_padding_ms: 500,
+          silence_duration_ms: 1200,
           create_response: true,
         },
         temperature: 0.7,
@@ -82,22 +80,22 @@ Keep responses brief and natural for voice conversation.`.trim(),
             type: "function",
             name: "search_knowledge_base",
             description:
-              "Search the knowledge base for relevant information to answer the user's question. Always use this before responding to questions about the platform or services.",
+              "REQUIRED function that searches the knowledge base. You MUST call this for EVERY user question before responding. Never skip this step.",
             parameters: {
               type: "object",
               properties: {
                 query: {
                   type: "string",
-                  description: "The search query to find relevant information",
+                  description:
+                    "Extract the key search terms from the user's question",
                 },
               },
               required: ["query"],
             },
           },
         ],
-        tool_choice: "auto",
+        tool_choice: "auto", // ← CRITICAL: Changed from "required"
       };
-
       const res = await fetch("https://api.openai.com/v1/realtime/sessions", {
         method: "POST",
         headers: {
@@ -187,8 +185,8 @@ Keep responses brief and natural for voice conversation. Aim for 2-3 sentences u
       turn_detection: {
         type: "server_vad",
         threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 500,
+        prefix_padding_ms: 500,
+        silence_duration_ms: 1200,
         create_response: true,
       },
       temperature: 0.7,

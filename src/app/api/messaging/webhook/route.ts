@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 // Import AI services
 import { Channel, logInteraction } from "@/lib/analytics/logInteraction";
 import { createEmbeddings } from "@/lib/embedding-service";
+import { CacheService, checkRateLimit, createHash } from "@/lib/upstash";
 
 const APP_SECRET = process.env.FACEBOOK_CLIENT_SECRET || undefined;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -118,15 +119,60 @@ async function sendInstagramMessage(
   }
 }
 
-// AI Response Generation
+// AI Response Generation with Caching
 async function generateAIResponse(
   kbId: string,
   message: string,
   userId: string,
   botId: string,
   channel: Channel = "whatsapp",
-): Promise<{ response: string; sources: any[] }> {
+): Promise<{ response: string; sources: any[]; cached?: boolean }> {
+  const cache = CacheService.getInstance();
+
   try {
+    // Check message-level cache first
+    const messageHash = createHash(message);
+    const cachedResponse = await cache.getChatResponse(kbId, messageHash);
+
+    if (cachedResponse) {
+      console.log(`Cache hit for message in KB ${kbId}`);
+
+      // Still log the interaction even for cached responses
+      const fallbackRegex =
+        /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
+      const isFallback =
+        !cachedResponse.sources?.length ||
+        fallbackRegex.test(cachedResponse.text);
+      const isCorrect =
+        (cachedResponse.sources?.length ?? 0) > 0 &&
+        cachedResponse.text.length > 10 &&
+        !isFallback;
+
+      await logInteraction({
+        userId: userId,
+        botId: botId,
+        channel: channel,
+        interactions: 1,
+        minutes: 0,
+        isCorrect,
+        isNegative: !isCorrect,
+        isFallback,
+        meta: {
+          messageType: "auto_reply",
+          retrievedCount: cachedResponse.sources?.length ?? 0,
+          cached: true,
+          originalMessage: message,
+          responseLength: cachedResponse.text.length,
+        },
+      });
+
+      return {
+        response: cachedResponse.text,
+        sources: cachedResponse.sources || [],
+        cached: true,
+      };
+    }
+
     // Load knowledge base
     const kb = await prisma.knowledgeBase.findUnique({
       where: { id: kbId },
@@ -143,19 +189,29 @@ async function generateAIResponse(
 
     const metadata = (kb.metadata as Record<string, unknown>) ?? {};
 
-    // Create embeddings for the message
-    const embeddings = await createEmbeddings([message]);
-    const queryVec = embeddings[0];
+    // Try to get cached embedding first
+    const cachedEmbedding = await cache.getEmbedding(message);
+    let queryVec: number[] | undefined = undefined;
+
+    if (Array.isArray(cachedEmbedding) && cachedEmbedding.length > 0) {
+      queryVec = cachedEmbedding as number[];
+    } else {
+      // Create new embedding and cache it
+      const embeddings = await createEmbeddings([message]);
+      queryVec = embeddings[0];
+      if (queryVec) {
+        await cache.setEmbedding(message, queryVec);
+      }
+    }
 
     let retrieved: Array<{ text: string; similarity: number; metadata: any }> =
       [];
 
     if (queryVec) {
-      // Use Upstash Vector for similarity search
       const { default: upstashVector } = await import("@/lib/upstash-vector");
 
       const results = await upstashVector.query(queryVec, {
-        topK: 3, // Limit for messaging to keep responses concise
+        topK: 3,
         includeMetadata: true,
         includeVectors: false,
         filter: `kbId = '${kbId.replace(/'/g, "\\'")}'`,
@@ -179,14 +235,10 @@ async function generateAIResponse(
       return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // Get personality from KB metadata
     const personality = (metadata?.personality as string) || "";
-
-    // Platform-specific character limits
     const charLimit =
       channel === "whatsapp" || channel === "facebook" ? 300 : 500;
 
-    // IMPROVED SYSTEM INSTRUCTION - matches chat route
     const systemInstruction =
       `You are a knowledgeable assistant with direct access to our platform's knowledge base.
 
@@ -234,16 +286,28 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
       temperature: 0.1,
     });
 
-    const responseText =
+    const assistantText =
       completion.choices[0]?.message?.content?.trim() ||
       "I'm sorry, I couldn't process your message right now.";
+
+    // Cache the full response with sources
+    const responseData = {
+      text: assistantText,
+      sources: retrieved.map((r, i) => ({
+        index: i + 1,
+        similarity: r.similarity,
+        metadata: r.metadata,
+      })),
+    };
+
+    await cache.setChatResponse(kbId, messageHash, responseData);
 
     // Log interaction
     const fallbackRegex =
       /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
-    const isFallback = !retrieved.length || fallbackRegex.test(responseText);
+    const isFallback = !retrieved.length || fallbackRegex.test(assistantText);
     const isCorrect =
-      retrieved.length > 0 && responseText.length > 10 && !isFallback;
+      retrieved.length > 0 && assistantText.length > 10 && !isFallback;
 
     await logInteraction({
       userId: userId,
@@ -259,17 +323,15 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
         retrievedCount: retrieved.length,
         promptSize: fullPrompt.length,
         originalMessage: message,
-        responseLength: responseText.length,
+        responseLength: assistantText.length,
+        cached: false,
       },
     });
 
     return {
-      response: responseText,
-      sources: retrieved.map((r, i) => ({
-        index: i + 1,
-        similarity: r.similarity,
-        metadata: r.metadata,
-      })),
+      response: assistantText,
+      sources: responseData.sources,
+      cached: false,
     };
   } catch (error) {
     console.error("AI response generation failed:", error);
@@ -281,7 +343,7 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
   }
 }
 
-// Existing verification functions...
+// Verification functions
 function sha256Hex(input: string) {
   return crypto.createHash("sha256").update(input, "utf8").digest("hex");
 }
@@ -397,7 +459,6 @@ export async function GET(req: NextRequest) {
       return new NextResponse(challenge, { status: 200 });
     }
 
-    // Handle legacy formats...
     if (parts.length === 2) {
       const [kbId, tokenPart] = parts;
       const kb = await prisma.knowledgeBase.findUnique({
@@ -440,7 +501,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Enhanced POST with AI auto-reply
+// Enhanced POST with AI auto-reply, caching, and rate limiting
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.arrayBuffer();
@@ -492,11 +553,9 @@ export async function POST(req: NextRequest) {
       return ids;
     };
 
-    // Extract message details for auto-reply - Enhanced for Instagram
     const extractMessageDetails = (p: any) => {
       const entries = Array.isArray(p?.entry) ? p.entry : [];
       for (const entry of entries) {
-        // WhatsApp messages
         const msgs =
           entry?.changes?.[0]?.value?.messages ?? entry?.messages ?? [];
         if (Array.isArray(msgs)) {
@@ -513,7 +572,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // Messenger format
         const messaging = entry?.messaging?.[0];
         if (messaging?.message?.text) {
           return {
@@ -525,7 +583,6 @@ export async function POST(req: NextRequest) {
           };
         }
 
-        // Instagram Direct Messages
         const changes = entry?.changes || [];
         for (const change of changes) {
           if (change?.field === "messages" && change?.value?.messages) {
@@ -550,20 +607,32 @@ export async function POST(req: NextRequest) {
     const { phoneId, pageId, instagramId } = extractIdsFromPayload(payload);
     const messageDetails = extractMessageDetails(payload);
 
+    // RATE LIMITING: Check before processing message
+    if (messageDetails?.senderId) {
+      const userIdentifier = `webhook:${messageDetails.platform}:${messageDetails.senderId}`;
+      const rateLimit = await checkRateLimit(userIdentifier, "chat");
+
+      if (!rateLimit.success) {
+        console.warn(
+          `Rate limit exceeded for ${userIdentifier}, limit resets at ${rateLimit.reset?.toISOString()}`,
+        );
+        // Don't send error message to user, just log and return success
+        // This prevents spamming users with rate limit messages
+        return NextResponse.json({ success: true }, { status: 200 });
+      }
+    }
+
     const found = await (async () => {
       try {
-        // collect candidate providers to check depending on what IDs we received
         const providersToCheck: string[] = [];
         if (phoneId) providersToCheck.push("whatsapp");
         if (pageId) providersToCheck.push("messenger");
         if (instagramId) providersToCheck.push("instagram");
 
-        // If none of the platform-specific IDs exist, still query all three (defensive)
         if (providersToCheck.length === 0) {
           providersToCheck.push("whatsapp", "messenger", "instagram");
         }
 
-        // fetch all enabled integrations for these providers (limit to reasonable number)
         const candidates = await prisma.integration.findMany({
           where: {
             provider: { in: providersToCheck },
@@ -577,7 +646,6 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        // Helper to safely read common credential keys from the JSON blob
         const credGet = (creds: any, keys: string[]) => {
           for (const k of keys) {
             if (
@@ -585,7 +653,6 @@ export async function POST(req: NextRequest) {
               typeof creds === "object" &&
               (creds[k] || creds[k] === "")
             ) {
-              // return as string or null if empty string
               return creds[k] === "" ? null : String(creds[k]);
             }
           }
@@ -595,7 +662,6 @@ export async function POST(req: NextRequest) {
         for (const integ of candidates) {
           const creds = integ.credentials as Record<string, any> | undefined;
 
-          // WhatsApp matching: check phone_number_id / phoneNumber / phone_number
           if (phoneId && integ.provider === "whatsapp") {
             const savedPhoneId = credGet(creds, [
               "phone_number_id",
@@ -614,7 +680,6 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // Messenger matching: check page_id / pageId
           if (pageId && integ.provider === "messenger") {
             const savedPageId = credGet(creds, ["page_id", "pageId", "page"]);
             if (savedPageId && savedPageId === String(pageId)) {
@@ -629,7 +694,6 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // Instagram matching: instagram_business_account_id or instagramBusinessAccountId
           if (instagramId && integ.provider === "instagram") {
             const savedIgId = credGet(creds, [
               "instagram_business_account_id",
@@ -648,7 +712,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // No exact match found. Don't return any default integration (avoids wrong writes).
         return null;
       } catch (err) {
         console.warn("Error finding integration for message:", err);
@@ -669,7 +732,6 @@ export async function POST(req: NextRequest) {
       kbId = (creds?.kbId as string) || null;
       channel = found.channel;
 
-      // Get bot ID from knowledge base
       if (kbId) {
         const kb = await prisma.knowledgeBase.findUnique({
           where: { id: kbId },
@@ -679,7 +741,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Generate AI response if we have a KB and message
+    // Generate AI response with caching
     if (
       kbId &&
       botId &&
@@ -688,7 +750,7 @@ export async function POST(req: NextRequest) {
       found
     ) {
       try {
-        const { response } = await generateAIResponse(
+        const { response, cached } = await generateAIResponse(
           kbId,
           messageDetails.text,
           found.userId,
@@ -696,14 +758,12 @@ export async function POST(req: NextRequest) {
           channel,
         );
 
-        // Get the integration credentials for sending
         const integ = await prisma.integration.findUnique({
           where: { id: found.integrationId },
           select: { credentials: true },
         });
         const creds = (integ?.credentials as Record<string, unknown>) || {};
 
-        // Send response based on platform
         let messageSent = false;
 
         if (
@@ -752,7 +812,7 @@ export async function POST(req: NextRequest) {
 
         if (messageSent) {
           console.log(
-            `Auto-reply sent via ${found.provider} to ${messageDetails.senderId}`,
+            `Auto-reply sent via ${found.provider} to ${messageDetails.senderId} (cached: ${cached})`,
           );
         }
       } catch (error) {
@@ -760,7 +820,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Persist lead - FIXED to always create lead when we have a KB
+    // Persist lead
     try {
       if (found && kbId && messageDetails) {
         const leadSource = `${found.provider}_messaging_webhook`;
@@ -790,7 +850,6 @@ export async function POST(req: NextRequest) {
           `Lead created for ${found.provider} message from ${messageDetails.senderId}`,
         );
       } else {
-        // Create audit log for unmapped webhooks
         await prisma.auditLog.create({
           data: {
             action: "messaging_webhook_unmapped",
