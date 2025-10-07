@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/app/widget/frame/page.tsx
 "use client";
 
@@ -53,6 +54,10 @@ export default function WidgetFrame() {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [userSpeaking, setUserSpeaking] = useState(false);
+  const [botSpeaking, setBotSpeaking] = useState(false);
+  const [prewarmedSession, setPrewarmedSession] = useState<any | null>(null);
 
   // Mode state
   const [mode, setMode] = useState<"text" | "voice">("text");
@@ -65,12 +70,14 @@ export default function WidgetFrame() {
   const textInputRef = useRef<HTMLInputElement | null>(null);
   const initializationRef = useRef<boolean>(false);
   const recordingTimerRef = useRef<number | null>(null);
+  const processingTimeoutRef = useRef<number | null>(null);
+  const audioLevelRafRef = useRef<number | null>(null);
 
   // WebRTC refs
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   const ephemeralSessionRef = useRef<any | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -207,6 +214,15 @@ export default function WidgetFrame() {
     });
   }, [messages]);
 
+  // Pre-warm session for voice mode
+  useEffect(() => {
+    if (mode === "voice" && permission === true && !prewarmedSession && kbId) {
+      fetchEphemeralSession()
+        .then(setPrewarmedSession)
+        .catch((err) => console.warn("Session pre-warm failed:", err));
+    }
+  }, [mode, permission, prewarmedSession, kbId]);
+
   // Recording timer
   useEffect(() => {
     if (recording) {
@@ -233,6 +249,12 @@ export default function WidgetFrame() {
   useEffect(() => {
     return () => {
       stopCall();
+      if (audioLevelRafRef.current) {
+        cancelAnimationFrame(audioLevelRafRef.current);
+      }
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+      }
       if (
         audioContextRef.current &&
         audioContextRef.current.state !== "closed"
@@ -460,6 +482,70 @@ export default function WidgetFrame() {
       sendTextMessage();
     }
   };
+
+  const startAudioLevelMonitoring = useCallback(() => {
+    const SPEAKING_THRESHOLD = 0.02;
+    const SILENCE_FRAMES = 15;
+    let silenceCounter = 0;
+    let speakingFrames = 0;
+    const SPEAKING_FRAMES_REQUIRED = 2;
+    let lastSpeakingState = false;
+
+    const updateLevel = () => {
+      if (!analyserRef.current || !recording) {
+        setAudioLevel(0);
+        setUserSpeaking(false);
+        if (audioLevelRafRef.current) {
+          cancelAnimationFrame(audioLevelRafRef.current);
+          audioLevelRafRef.current = null;
+        }
+        return;
+      }
+
+      const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+      analyserRef.current.getByteFrequencyData(data);
+      const avg = data.reduce((s, v) => s + v, 0) / data.length / 255;
+
+      setAudioLevel(avg);
+
+      // Determine speaking state
+      let currentlySpeaking = false;
+
+      if (avg > SPEAKING_THRESHOLD) {
+        speakingFrames++;
+        silenceCounter = 0;
+
+        if (speakingFrames >= SPEAKING_FRAMES_REQUIRED) {
+          currentlySpeaking = true;
+        }
+      } else {
+        speakingFrames = 0;
+        silenceCounter++;
+
+        if (silenceCounter > SILENCE_FRAMES) {
+          currentlySpeaking = false;
+        } else {
+          currentlySpeaking = lastSpeakingState;
+        }
+      }
+
+      // Only update state if it changed
+      if (currentlySpeaking !== lastSpeakingState) {
+        console.log("🎤 User speaking state changed:", currentlySpeaking);
+        setUserSpeaking(currentlySpeaking);
+        lastSpeakingState = currentlySpeaking;
+      }
+
+      audioLevelRafRef.current = requestAnimationFrame(updateLevel);
+    };
+
+    // Cancel any existing animation frame before starting new one
+    if (audioLevelRafRef.current) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+    }
+
+    updateLevel();
+  }, [recording]);
 
   const isRtl = language === "ar";
   const pending = isTyping || voicePending;
@@ -711,11 +797,18 @@ export default function WidgetFrame() {
             break;
 
           case "input_audio_buffer.speech_started":
-            console.log("User started speaking");
+            console.log("🎤 User started speaking (VAD detected)");
+            setIsProcessing(true);
+            setUserSpeaking(true);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+            }
             break;
 
           case "input_audio_buffer.speech_stopped":
-            console.log("User stopped speaking");
+            console.log("🎤 User stopped speaking (VAD detected)");
+            setIsProcessing(true);
+            setUserSpeaking(false);
             break;
 
           case "input_audio_buffer.committed":
@@ -743,7 +836,11 @@ export default function WidgetFrame() {
             break;
 
           case "response.created":
-            console.log("Response created:", payload.response);
+            processingTimeoutRef.current = window.setTimeout(() => {
+              console.warn("Response timeout - no response received");
+              setIsProcessing(false);
+              setBotSpeaking(false);
+            }, 15000);
             break;
 
           case "response.output_item.added":
@@ -841,7 +938,8 @@ export default function WidgetFrame() {
             break;
 
           case "response.audio_transcript.delta":
-            console.log("Audio transcript delta:", payload.delta);
+            console.log("Bot is speaking (transcript delta)");
+            setBotSpeaking(true);
             break;
 
           case "response.audio_transcript.done":
@@ -875,18 +973,27 @@ export default function WidgetFrame() {
             break;
 
           case "response.audio.delta":
-            console.log(
-              "Audio delta received, length:",
-              payload.delta?.length || 0,
-            );
+            console.log("🟢 Bot audio delta - speaking ON");
+            setBotSpeaking(true);
             break;
 
           case "response.audio.done":
-            console.log("Audio response completed");
+            console.log("🔴 Bot audio done - speaking OFF");
+            setBotSpeaking(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
             break;
 
           case "response.done":
-            console.log("Response completed:", payload.response);
+            console.log("Response fully complete");
+            setIsProcessing(false);
+            setBotSpeaking(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
             break;
 
           case "rate_limits.updated":
@@ -895,6 +1002,12 @@ export default function WidgetFrame() {
 
           case "error":
             console.error("Realtime API error:", payload);
+            setIsProcessing(false);
+            setBotSpeaking(false);
+            if (processingTimeoutRef.current) {
+              clearTimeout(processingTimeoutRef.current);
+              processingTimeoutRef.current = null;
+            }
             pushMessage({
               id: `error-${Date.now()}`,
               role: "bot",
@@ -942,7 +1055,9 @@ export default function WidgetFrame() {
 
       // 1) Create ephemeral session with kbId context
       console.log("Creating ephemeral session...");
-      const session = await fetchEphemeralSession();
+      const session = prewarmedSession || (await fetchEphemeralSession());
+      setPrewarmedSession(null);
+
       const ephemeralToken =
         session?.client_secret?.value ?? session?.client_secret;
 
@@ -970,7 +1085,6 @@ export default function WidgetFrame() {
 
       // Setup audio monitoring
       const ac = new (window.AudioContext ||
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (window as any).webkitAudioContext)();
       audioContextRef.current = ac;
       const analyser = ac.createAnalyser();
@@ -1055,6 +1169,7 @@ export default function WidgetFrame() {
 
       // Mark as recording
       setRecording(true);
+      startAudioLevelMonitoring();
 
       pushMessage({
         id: `session-start-${Date.now()}`,
@@ -1101,6 +1216,14 @@ export default function WidgetFrame() {
   const stopCall = () => {
     setRecording(false);
     setAudioLevel(0);
+    setUserSpeaking(false);
+    setBotSpeaking(false);
+    setPrewarmedSession(null);
+
+    if (audioLevelRafRef.current) {
+      cancelAnimationFrame(audioLevelRafRef.current);
+      audioLevelRafRef.current = null;
+    }
 
     try {
       if (localStreamRef.current) {
@@ -1176,6 +1299,35 @@ export default function WidgetFrame() {
   const isInCall = recording;
   const pendingStatus = isTyping || voicePending;
 
+  // Speaking Indicator Component
+  const SpeakingIndicator = ({
+    active,
+    color = "blue",
+  }: {
+    active: boolean;
+    color?: string;
+  }) => (
+    <div className="flex items-center gap-1">
+      {[...Array(4)].map((_, i) => (
+        <div
+          key={i}
+          className={cn(
+            "w-1 rounded-full transition-all duration-200",
+            active
+              ? color === "blue"
+                ? "animate-pulse bg-blue-500"
+                : "animate-pulse bg-green-500"
+              : "bg-gray-300 dark:bg-gray-700",
+          )}
+          style={{
+            height: active ? `${8 + Math.random() * 8}px` : "8px",
+            animationDelay: `${i * 0.1}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
+
   return (
     <div
       className={cn("flex h-full min-h-0 flex-col", isRtl && "rtl")}
@@ -1218,17 +1370,35 @@ export default function WidgetFrame() {
                   ? "Chat Assistant"
                   : "مساعد الدردشة"}
             </h3>
-            <p className="text-muted-foreground text-xs">
-              {isInCall
-                ? language === "en"
-                  ? `In call • ${formatTime(recordingTime)}`
-                  : `في المكالمة • ${formatTime(recordingTime)}`
-                : pendingStatus
+            <div className="flex items-center gap-2">
+              <p className="text-muted-foreground text-xs">
+                {isInCall
                   ? language === "en"
-                    ? "Processing..."
-                    : "جاري المعالجة..."
-                  : `${messages.length} ${language === "en" ? "messages" : "رسائل"}`}
-            </p>
+                    ? `In call • ${formatTime(recordingTime)}`
+                    : `في المكالمة • ${formatTime(recordingTime)}`
+                  : pendingStatus
+                    ? language === "en"
+                      ? "Processing..."
+                      : "جاري المعالجة..."
+                    : `${messages.length} ${language === "en" ? "messages" : "رسائل"}`}
+              </p>
+              {isInCall && (
+                <>
+                  {userSpeaking && (
+                    <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                      <Mic className="h-3 w-3" />
+                      <SpeakingIndicator active={true} color="blue" />
+                    </div>
+                  )}
+                  {botSpeaking && (
+                    <div className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+                      <Volume2 className="h-3 w-3" />
+                      <SpeakingIndicator active={true} color="green" />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1641,52 +1811,133 @@ export default function WidgetFrame() {
               </div>
             )}
 
-            <div className="flex items-center justify-center">
-              {!isInCall ? (
-                <Button
-                  onClick={startCall}
-                  disabled={voicePending || permission === false || !isReady}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "shadow-lg hover:scale-105 hover:shadow-xl",
-                    "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
-                  )}
-                  title={
-                    language === "en"
-                      ? "Start voice call"
-                      : "ابدأ المكالمة الصوتية"
-                  }
-                  style={{
-                    background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
-                  }}
-                >
-                  <Phone className="h-8 w-8 text-white" />
-                </Button>
-              ) : (
-                <Button
-                  onClick={stopCall}
-                  className={cn(
-                    "h-16 w-16 rounded-full p-0 transition-all duration-200",
-                    "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
-                    "shadow-lg hover:shadow-xl",
-                  )}
-                  title={language === "en" ? "End call" : "إنهاء المكالمة"}
-                >
-                  <PhoneOff className="h-8 w-8 text-white" />
-                </Button>
-              )}
-            </div>
+            <div className="space-y-3">
+              {/* Voice Status Indicators */}
+              {isInCall && (
+                <div className="flex items-center justify-center gap-4">
+                  {/* User Speaking Status */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-full px-4 py-2 transition-all duration-300",
+                      userSpeaking
+                        ? "bg-blue-100 dark:bg-blue-900/30"
+                        : "bg-gray-100 dark:bg-gray-800",
+                    )}
+                  >
+                    <Mic
+                      className={cn(
+                        "h-4 w-4 transition-colors",
+                        userSpeaking ? "text-blue-600" : "text-gray-400",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        userSpeaking
+                          ? "text-blue-700 dark:text-blue-300"
+                          : "text-gray-500",
+                      )}
+                    >
+                      {language === "en" ? "You" : "أنت"}
+                    </span>
+                    <SpeakingIndicator active={userSpeaking} color="blue" />
+                  </div>
 
-            <div className="mt-3 text-center">
-              <p className="text-muted-foreground text-xs">
-                {isInCall
-                  ? language === "en"
-                    ? "Speak naturally — the assistant will reply automatically"
-                    : "تحدث بطبيعية — سيقوم المساعد بالرد تلقائيًا"
-                  : language === "en"
-                    ? "Tap to start a real-time voice conversation"
-                    : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
-              </p>
+                  {/* Bot Speaking Status */}
+                  <div
+                    className={cn(
+                      "flex items-center gap-2 rounded-full px-4 py-2 transition-all duration-300",
+                      botSpeaking
+                        ? "bg-green-100 dark:bg-green-900/30"
+                        : "bg-gray-100 dark:bg-gray-800",
+                    )}
+                  >
+                    <Volume2
+                      className={cn(
+                        "h-4 w-4 transition-colors",
+                        botSpeaking ? "text-green-600" : "text-gray-400",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-xs font-medium",
+                        botSpeaking
+                          ? "text-green-700 dark:text-green-300"
+                          : "text-gray-500",
+                      )}
+                    >
+                      {language === "en" ? "Assistant" : "المساعد"}
+                    </span>
+                    <SpeakingIndicator active={botSpeaking} color="green" />
+                  </div>
+                </div>
+              )}
+
+              {/* Call Button */}
+              <div className="flex items-center justify-center">
+                {!isInCall ? (
+                  <Button
+                    onClick={startCall}
+                    disabled={voicePending || permission === false || !isReady}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "shadow-lg hover:scale-105 hover:shadow-xl",
+                      "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100",
+                    )}
+                    title={
+                      language === "en"
+                        ? "Start voice call"
+                        : "ابدأ المكالمة الصوتية"
+                    }
+                    style={{
+                      background: `linear-gradient(to bottom right, ${primaryColor}, ${accentColor})`,
+                    }}
+                  >
+                    {voicePending ? (
+                      <Loader className="h-8 w-8 animate-spin text-white" />
+                    ) : (
+                      <Phone className="h-8 w-8 text-white" />
+                    )}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={stopCall}
+                    className={cn(
+                      "h-16 w-16 rounded-full p-0 transition-all duration-200",
+                      "bg-gradient-to-br from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700",
+                      "shadow-lg hover:shadow-xl",
+                    )}
+                    title={language === "en" ? "End call" : "إنهاء المكالمة"}
+                  >
+                    <PhoneOff className="h-8 w-8 text-white" />
+                  </Button>
+                )}
+              </div>
+
+              {/* Status Text */}
+              <div className="text-center">
+                <p className="text-muted-foreground text-xs">
+                  {isInCall
+                    ? isProcessing
+                      ? language === "en"
+                        ? "Processing your message..."
+                        : "معالجة رسالتك..."
+                      : userSpeaking
+                        ? language === "en"
+                          ? "Listening to you..."
+                          : "يستمع إليك..."
+                        : botSpeaking
+                          ? language === "en"
+                            ? "Assistant is responding..."
+                            : "المساعد يستجيب..."
+                          : language === "en"
+                            ? "Speak naturally — I'm listening"
+                            : "تحدث بطبيعية — أنا أستمع"
+                    : language === "en"
+                      ? "Tap to start a real-time voice conversation"
+                      : "اضغط لبدء محادثة صوتية في الوقت الفعلي"}
+                </p>
+              </div>
             </div>
           </>
         )}
