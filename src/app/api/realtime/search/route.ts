@@ -1,6 +1,10 @@
 // src/app/api/realtime/search/route.ts
 import { createEmbeddings } from "@/lib/embedding-service";
 import { prisma } from "@/lib/prisma";
+import {
+  checkUsageLimits,
+  getOverageRate,
+} from "@/lib/subscription/checkUsageLimits";
 import upstashVector from "@/lib/upstash-vector";
 import { upstashSearchSimilar } from "@/search/upstash-search";
 import { NextResponse } from "next/server";
@@ -89,6 +93,13 @@ function getDemoResults(query: string, topK: number) {
     .slice(0, topK);
 }
 
+function estimateMinutesFromText(text?: string | null, wpm = 200) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return 0;
+  return Math.max(1, Math.ceil(words / wpm));
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -151,13 +162,14 @@ export async function POST(req: Request) {
     }
 
     // Regular KB handling (non-demo)
-    // Validate KB exists
+    // Validate KB exists and get owner userId (for subscription checks)
     const kb = await prisma.knowledgeBase.findUnique({
       where: { id: kbId },
       select: {
         id: true,
         title: true,
         metadata: true,
+        userId: true,
       },
     });
 
@@ -167,6 +179,44 @@ export async function POST(req: Request) {
         { status: 404 },
       );
     }
+
+    // ========== SUBSCRIPTION & USAGE LIMIT CHECK ==========
+    // Estimate minutes from the query and check usage for the KB owner.
+    try {
+      const estimatedMinutes = estimateMinutesFromText(query);
+      const usageCheck = await checkUsageLimits(kb.userId, estimatedMinutes);
+
+      if (!usageCheck.allowed) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const responseBody: any = {
+          error: "usage_limit_exceeded",
+          message: usageCheck.reason,
+          requiresUpgrade: usageCheck.requiresUpgrade,
+          planName: usageCheck.planName,
+        };
+
+        if (usageCheck.remainingMinutes !== undefined) {
+          responseBody.usage = {
+            remaining: usageCheck.remainingMinutes,
+            total: usageCheck.totalMinutes,
+            used: usageCheck.usedMinutes,
+          };
+        }
+
+        if (usageCheck.planName) {
+          const overageRate = getOverageRate(usageCheck.planName);
+          if (overageRate > 0) {
+            responseBody.overageRate = overageRate;
+          }
+        }
+
+        return NextResponse.json(responseBody, { status: 402 });
+      }
+    } catch (err) {
+      console.warn("Usage check failed:", err);
+      // If usage check fails unexpectedly, continue but log (fail-open).
+    }
+    // ========== END SUBSCRIPTION CHECK ==========
 
     // Perform retrieval
     let retrieved: Array<{

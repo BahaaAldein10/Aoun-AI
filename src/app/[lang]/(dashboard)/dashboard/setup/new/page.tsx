@@ -1,7 +1,7 @@
 import SetupClient from "@/components/dashboard/SetupClient";
-import { canCreateMoreAgents } from "@/lib/actions/agent";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
+import { checkAgentLimit } from "@/lib/subscription/checkUsageLimits";
 import { redirect } from "next/navigation";
 
 type SetupPageProps = {
@@ -14,10 +14,14 @@ const SetupPage = async ({ params }: SetupPageProps) => {
   const session = await auth();
   const userId = session?.user?.id;
 
-  const canCreateMore = await canCreateMoreAgents();
-
   if (!userId) return redirect(`/${lang}/auth/login`);
-  if (!canCreateMore) return redirect(`/${lang}/dashboard/setup`);
+
+  // Check if user can create more agents using subscription control
+  const agentCheck = await checkAgentLimit(userId);
+
+  if (!agentCheck.allowed) {
+    return redirect(`/${lang}/dashboard/setup`);
+  }
 
   return <SetupClient lang={lang} dict={dict} currentUserId={userId!} />;
 };

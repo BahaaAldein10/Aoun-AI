@@ -68,11 +68,16 @@ const KnowledgeBaseListClient = ({
 
         <div className="flex flex-wrap gap-2">
           {canCreateMore ? (
-            <Button asChild>
-              <Link href={`/${lang}/dashboard/setup/new`}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t.create_new_kb || "Create New"}
-              </Link>
+            <Button
+              disabled={!canCreateMore}
+              onClick={() => {
+                if (canCreateMore) {
+                  window.location.href = `/${lang}/dashboard/setup/new`;
+                }
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {t.create_new_kb || "Create New"}
             </Button>
           ) : (
             <Button disabled>

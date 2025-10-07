@@ -1,10 +1,22 @@
+// src/app/api/realtime/session/route.ts
 import { KbMetadata } from "@/components/dashboard/KnowledgeBaseClient";
 import { prisma } from "@/lib/prisma";
+import {
+  checkUsageLimits,
+  getOverageRate,
+} from "@/lib/subscription/checkUsageLimits";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
+
+function estimateMinutesFromText(text?: string | null, wpm = 200) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return 0;
+  return Math.max(1, Math.ceil(words / wpm));
+}
 
 export async function POST(req: Request) {
   try {
@@ -174,6 +186,47 @@ CRITICAL INSTRUCTIONS:
 ${personality ? `Additional guidance: ${personality}` : ""}
 
 Keep responses brief and natural for voice conversation. Aim for 2-3 sentences unless more detail is specifically requested.`.trim();
+
+    // ========== SUBSCRIPTION & USAGE LIMIT CHECK ==========
+    try {
+      // Estimate minutes based on the instruction length (represents expected response verbosity)
+      const estimatedMinutes = Math.max(
+        1,
+        estimateMinutesFromText(kbInstructions),
+      );
+      const usageCheck = await checkUsageLimits(kb.userId, estimatedMinutes);
+
+      if (!usageCheck.allowed) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const responseBody: any = {
+          error: "usage_limit_exceeded",
+          message: usageCheck.reason,
+          requiresUpgrade: usageCheck.requiresUpgrade,
+          planName: usageCheck.planName,
+        };
+
+        if (usageCheck.remainingMinutes !== undefined) {
+          responseBody.usage = {
+            remaining: usageCheck.remainingMinutes,
+            total: usageCheck.totalMinutes,
+            used: usageCheck.usedMinutes,
+          };
+        }
+
+        if (usageCheck.planName) {
+          const overageRate = getOverageRate(usageCheck.planName);
+          if (overageRate > 0) {
+            responseBody.overageRate = overageRate;
+          }
+        }
+
+        return NextResponse.json(responseBody, { status: 402 });
+      }
+    } catch (err) {
+      console.warn("Usage check failed (session route):", err);
+      // Fail-open: allow session creation on transient errors but log the problem.
+    }
+    // ========== END SUBSCRIPTION CHECK ==========
 
     const sessionConfig = {
       model,

@@ -10,7 +10,7 @@ import { deleteFilesFromFirebase } from "../deleteFilesFromFirebase";
 import { SupportedLang } from "../dictionaries";
 import { prisma } from "../prisma";
 import { settingsSchema } from "../schemas/dashboard";
-import { canCreateMoreAgents } from "./agent";
+import { checkAgentLimit } from "../subscription/checkUsageLimits";
 
 interface UpdateSettingsNameParams {
   userId: string;
@@ -78,8 +78,18 @@ export async function createKb(params: CreateKbParams) {
   const userId = session?.user?.id;
   if (!userId) throw new Error("Not authenticated");
 
-  const canCreateMore = await canCreateMoreAgents();
-  if (!canCreateMore) throw new Error("Limit reached");
+  // Check subscription and agent limit
+  const agentCheck = await checkAgentLimit(userId);
+  if (!agentCheck.allowed) {
+    // Provide detailed error message based on the reason
+    if (agentCheck.requiresUpgrade) {
+      throw new Error(
+        agentCheck.reason ||
+          "Agent limit reached. Please upgrade your plan to create more agents.",
+      );
+    }
+    throw new Error(agentCheck.reason || "Cannot create agent at this time.");
+  }
 
   try {
     const kb = await prisma.knowledgeBase.create({
@@ -133,7 +143,13 @@ export async function createKb(params: CreateKbParams) {
 
     return { bot, kb: updatedKb };
   } catch (error) {
-    console.error(error);
+    console.error("createKb error:", error);
+
+    // Re-throw subscription errors with original message
+    if (error instanceof Error && error.message.includes("limit")) {
+      throw error;
+    }
+
     throw new Error("Failed to create Knowledge Base");
   }
 }
@@ -167,6 +183,11 @@ export async function updateKb(botId: string, params: CreateKbParams) {
       throw new Error("Bot or Knowledge Base not found");
     }
 
+    // Verify user owns this bot (already checked in findUnique, but explicit for security)
+    if (bot.userId !== userId) {
+      throw new Error("Unauthorized: You don't own this bot");
+    }
+
     // Update both in a transaction
     const [updatedKb, updatedBot] = await prisma.$transaction([
       prisma.knowledgeBase.update({
@@ -198,7 +219,13 @@ export async function updateKb(botId: string, params: CreateKbParams) {
 
     return { kb: updatedKb, bot: updatedBot };
   } catch (error) {
-    console.error(error);
+    console.error("updateKb error:", error);
+
+    // Re-throw with original message if it's already a meaningful error
+    if (error instanceof Error) {
+      throw error;
+    }
+
     throw new Error("Failed to update Knowledge Base");
   }
 }

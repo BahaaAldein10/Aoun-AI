@@ -3,10 +3,12 @@ import SetupListClient from "@/components/dashboard/SetupListClient";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
+import { getAgentLimitInfo } from "@/lib/subscription/checkUsageLimits";
 import { redirect } from "next/navigation";
 
 type SetupListPageProps = {
   params: Promise<{ lang: SupportedLang }>;
+  searchParams: Promise<{ error?: string }>;
 };
 
 const SetupListPage = async ({ params }: SetupListPageProps) => {
@@ -17,11 +19,12 @@ const SetupListPage = async ({ params }: SetupListPageProps) => {
 
   if (!userId) return redirect(`/${lang}/auth/login`);
 
-  // Get user's subscription to check limits
+  const agentLimitInfo = await getAgentLimitInfo(userId);
+
   const subscription = await prisma.subscription.findFirst({
     where: {
       userId,
-      status: { in: ["ACTIVE", "TRIALING"] },
+      status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
     },
     include: { plan: true },
     orderBy: { createdAt: "desc" },
@@ -63,15 +66,12 @@ const SetupListPage = async ({ params }: SetupListPageProps) => {
     };
   });
 
-  const allowedAgents = subscription?.plan?.agents || 1;
-  const canCreateMore = agentsWithDetails.length < allowedAgents;
-
   return (
     <SetupListClient
       agents={agentsWithDetails}
       subscription={subscription}
-      canCreateMore={canCreateMore}
-      maxAgents={allowedAgents}
+      canCreateMore={agentLimitInfo.canCreateMore}
+      maxAgents={agentLimitInfo.limit}
       lang={lang}
       dict={dict}
     />

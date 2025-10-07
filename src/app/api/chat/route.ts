@@ -6,6 +6,10 @@ import {
   recordInvocationMetrics,
   startInvocation,
 } from "@/lib/monitoring/vercelMetrics";
+import {
+  checkUsageLimits,
+  getOverageRate,
+} from "@/lib/subscription/checkUsageLimits";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextResponse } from "next/server";
@@ -103,7 +107,7 @@ export async function POST(req: Request) {
 
     const isDemoKb = DEMO_KB_ID !== null && kbId === DEMO_KB_ID;
 
-    // Widget JWT verification (attempt if auth header present)
+    // Widget JWT verification
     const authHeader = (req.headers.get("authorization") || "").replace(
       /^Bearer\s+/,
       "",
@@ -127,32 +131,8 @@ export async function POST(req: Request) {
           );
         }
       } catch {
-        // invalid token -> treat as absent, fallback to API-key flow (unless demo KB)
         widgetPayload = null;
       }
-    }
-
-    // RATE LIMIT:
-    // - For legacy demo KB we skip server-side rate-limiting so the old widget continues to work.
-    // - For everything else we enforce the normal rate limiter.
-    let rateLimit: { success: boolean; remaining: number; reset?: Date };
-    if (isDemoKb) {
-      rateLimit = { success: true, remaining: Number.MAX_SAFE_INTEGER };
-    } else {
-      const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
-      const rl = await checkRateLimit(userIdentifier, "chat");
-      if (!rl.success) {
-        return NextResponse.json(
-          {
-            error: "Rate limit exceeded",
-            limit: rl.limit,
-            remaining: rl.remaining,
-            reset: rl.reset.toISOString(),
-          },
-          { status: 429 },
-        );
-      }
-      rateLimit = rl;
     }
 
     // Load KB
@@ -187,7 +167,7 @@ export async function POST(req: Request) {
 
     const metadata = kbData.metadata ?? {};
 
-    // Widget origin check: only enforced for non-demo KBs when widget token present
+    // Widget origin check
     if (!isDemoKb && widgetPayload) {
       const allowedOrigins = Array.isArray(metadata.allowedOrigins)
         ? metadata.allowedOrigins.map((o: string) => new URL(o).origin)
@@ -208,9 +188,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // API key protection:
-    // - If request targets legacy demo KB, allow missing API key (legacy widget)
-    // - Otherwise require either a valid widget token OR a matching API key hash
+    // API key protection
     if (!isDemoKb && !widgetPayload) {
       const storedHashHex =
         typeof metadata.apiKeyHash === "string"
@@ -247,13 +225,73 @@ export async function POST(req: Request) {
       }
     }
 
+    // ========== SUBSCRIPTION & USAGE LIMIT CHECK ==========
+    // Skip for demo KB (legacy support)
+    if (!isDemoKb) {
+      const estimatedMinutes = estimateMinutesFromText(message);
+      const usageCheck = await checkUsageLimits(
+        kbData.userId,
+        estimatedMinutes,
+      );
+
+      if (!usageCheck.allowed) {
+        const responseBody: any = {
+          error: "usage_limit_exceeded",
+          message: usageCheck.reason,
+          requiresUpgrade: usageCheck.requiresUpgrade,
+          planName: usageCheck.planName,
+        };
+
+        // Include usage stats if available
+        if (usageCheck.remainingMinutes !== undefined) {
+          responseBody.usage = {
+            remaining: usageCheck.remainingMinutes,
+            total: usageCheck.totalMinutes,
+            used: usageCheck.usedMinutes,
+          };
+        }
+
+        // Include overage rate if applicable
+        if (usageCheck.planName) {
+          const overageRate = getOverageRate(usageCheck.planName);
+          if (overageRate > 0) {
+            responseBody.overageRate = overageRate;
+          }
+        }
+
+        return NextResponse.json(responseBody, { status: 402 }); // 402 Payment Required
+      }
+    }
+    // ========== END SUBSCRIPTION CHECK ==========
+
+    // RATE LIMIT (for burst protection, even with valid subscription)
+    let rateLimit: { success: boolean; remaining: number; reset?: Date };
+    if (isDemoKb) {
+      rateLimit = { success: true, remaining: Number.MAX_SAFE_INTEGER };
+    } else {
+      const userIdentifier = getUserIdentifier(req, widgetPayload) ?? null;
+      const rl = await checkRateLimit(userIdentifier, "chat");
+      if (!rl.success) {
+        return NextResponse.json(
+          {
+            error: "Rate limit exceeded",
+            limit: rl.limit,
+            remaining: rl.remaining,
+            reset: rl.reset.toISOString(),
+          },
+          { status: 429 },
+        );
+      }
+      rateLimit = rl;
+    }
+
     // topK
     const topK = Math.max(
       1,
       Math.min(MAX_TOP_K, Number(requestedTopK ?? DEFAULT_TOP_K)),
     );
 
-    // Check chat cache for exact message
+    // Check chat cache
     const messageHash = createHash(message);
     const cachedResponse = await cache.getChatResponse(targetKbId, messageHash);
 
@@ -261,7 +299,6 @@ export async function POST(req: Request) {
       const minutes = estimateMinutesFromText(message);
       const eventId = crypto.randomUUID();
 
-      // Heuristic correctness detection
       const fallbackRegex =
         /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
       const isFallback =
@@ -273,7 +310,6 @@ export async function POST(req: Request) {
         !isFallback;
       const isNegative = !isCorrect;
 
-      // Log interaction (use demo-user for legacy demo KB)
       try {
         await logInteraction({
           userId: kbData.userId,
@@ -300,7 +336,6 @@ export async function POST(req: Request) {
         console.warn("logInteraction failed (cached path):", err);
       }
 
-      // Upsert usage row (still record usage so analytics remain useful)
       try {
         await prisma.usage.upsert({
           where: { eventId },
@@ -418,10 +453,9 @@ export async function POST(req: Request) {
       return `SOURCE ${i + 1} (${label}, score=${(r.similarity || 0).toFixed(3)}):\n${r.text}`;
     });
 
-    // Build prompt (use KB/personality if present)
+    // Build prompt
     const personality = (metadata?.personality as string) || "";
 
-    // FIXED: More explicit system instruction that tells the model to use retrieved data
     const systemInstruction =
       `You are a knowledgeable assistant with direct access to our platform's knowledge base.
 
@@ -509,7 +543,7 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
       }
     }
 
-    // Prepare responseData and cache full response
+    // Prepare responseData and cache
     const responseData = {
       text: assistantText ?? "",
       sources: retrieved.map((r, i) => ({
@@ -525,7 +559,6 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
     const chatMinutes = estimateMinutesFromText(prompt, 200);
     const eventId = crypto.randomUUID();
 
-    // Heuristic correctness detection
     const fallbackRegex =
       /\b(i (do not|don't) know|cannot find|no information|sorry,|unable to)/i;
     const isFallback = !retrieved.length || fallbackRegex.test(assistantText);
@@ -559,7 +592,6 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
       console.warn("logInteraction failed (llm path):", err);
     }
 
-    // Upsert usage row
     try {
       await prisma.usage.upsert({
         where: { eventId },
@@ -609,7 +641,6 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
       console.warn("usage upsert failed (llm path):", err);
     }
 
-    // Record metrics for monitoring
     void recordInvocationMetrics(await invCtx, {
       llmResponseMs: llmMs,
       userId: kbData.userId,
@@ -617,7 +648,6 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
       tag: "chat",
     });
 
-    // Return response
     return NextResponse.json({
       success: true,
       text: assistantText,

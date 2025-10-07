@@ -9,6 +9,10 @@ import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  checkUsageLimits,
+  getOverageRate,
+} from "@/lib/subscription/checkUsageLimits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +67,7 @@ function estimateMinutesFromText(text?: string | null, wpm = 150) {
 }
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // 25MB
+const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
 
 export async function POST(request: NextRequest) {
   // dynamic imports (lazy)
@@ -210,6 +215,7 @@ export async function POST(request: NextRequest) {
     }
 
     const metadata = kbData.metadata;
+    const isDemoKb = DEMO_KB_ID !== null && kbId === DEMO_KB_ID;
 
     // Auth checks (widget vs API key)
     if (widgetPayload) {
@@ -324,6 +330,50 @@ export async function POST(request: NextRequest) {
         if (audioHash) await cache.setTranscription(audioHash, transcript);
       }
     }
+
+    // ---------- SUBSCRIPTION & USAGE CHECK ----------
+    try {
+      if (!isDemoKb) {
+        const estimatedMinutes = Math.max(
+          1,
+          estimateMinutesFromText(transcript),
+        );
+        const usageCheck = await checkUsageLimits(
+          kbData.userId,
+          estimatedMinutes,
+        );
+
+        if (!usageCheck.allowed) {
+          const responseBody: any = {
+            error: "usage_limit_exceeded",
+            message: usageCheck.reason,
+            requiresUpgrade: usageCheck.requiresUpgrade,
+            planName: usageCheck.planName,
+          };
+
+          if (usageCheck.remainingMinutes !== undefined) {
+            responseBody.usage = {
+              remaining: usageCheck.remainingMinutes,
+              total: usageCheck.totalMinutes,
+              used: usageCheck.usedMinutes,
+            };
+          }
+
+          if (usageCheck.planName) {
+            const overageRate = getOverageRate(usageCheck.planName);
+            if (overageRate > 0) {
+              responseBody.overageRate = overageRate;
+            }
+          }
+
+          return NextResponse.json(responseBody, { status: 402 });
+        }
+      }
+    } catch (err) {
+      console.warn("Usage check failed (voice):", err);
+      // Fail-open: continue on transient errors but log it
+    }
+    // ---------- END SUBSCRIPTION & USAGE CHECK ----------
 
     const isArabic = /[\u0600-\u06FF]/.test(transcript ?? "");
     const llmModel = process.env.CHAT_MODEL || "gpt-4o-mini";

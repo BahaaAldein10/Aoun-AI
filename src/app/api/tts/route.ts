@@ -13,6 +13,10 @@ import { prisma } from "@/lib/prisma";
 import crypto from "crypto";
 import { jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  checkUsageLimits,
+  getOverageRate,
+} from "@/lib/subscription/checkUsageLimits";
 
 const DEMO_KB_ID = process.env.DEMO_KB_ID ?? null;
 
@@ -230,6 +234,47 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+
+    // ---------- SUBSCRIPTION & USAGE CHECK ----------
+    try {
+      if (!isDemoKb) {
+        const estimatedMinutes = estimateMinutesFromText(text);
+        const usageCheck = await checkUsageLimits(
+          kbData.userId,
+          estimatedMinutes,
+        );
+
+        if (!usageCheck.allowed) {
+          const responseBody: any = {
+            error: "usage_limit_exceeded",
+            message: usageCheck.reason,
+            requiresUpgrade: usageCheck.requiresUpgrade,
+            planName: usageCheck.planName,
+          };
+
+          if (usageCheck.remainingMinutes !== undefined) {
+            responseBody.usage = {
+              remaining: usageCheck.remainingMinutes,
+              total: usageCheck.totalMinutes,
+              used: usageCheck.usedMinutes,
+            };
+          }
+
+          if (usageCheck.planName) {
+            const overageRate = getOverageRate(usageCheck.planName);
+            if (overageRate > 0) {
+              responseBody.overageRate = overageRate;
+            }
+          }
+
+          return NextResponse.json(responseBody, { status: 402 });
+        }
+      }
+    } catch (err) {
+      console.warn("Usage check failed (tts):", err);
+      // Fail-open: continue on transient errors but log it
+    }
+    // ---------- END SUBSCRIPTION & USAGE CHECK ----------
 
     // Build consistent cache key and check cache
     const ttsKey = `${text}::${voice}::${speed}`;

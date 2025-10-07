@@ -226,11 +226,17 @@ const SetupListClient: React.FC<SetupListClientProps> = ({
               {t.create_first_agent ||
                 "Create your first AI agent to get started. You can train it with your website content or upload documents."}
             </p>
-            <Button asChild size="lg">
-              <Link href={`/${lang}/dashboard/setup/new`}>
-                <Plus className="mr-2 h-5 w-5" />
-                {t.create_first || "Create Your First Agent"}
-              </Link>
+            <Button
+              size="lg"
+              disabled={!canCreateMore}
+              onClick={() => {
+                if (canCreateMore) {
+                  window.location.href = `/${lang}/dashboard/setup/new`;
+                }
+              }}
+            >
+              <Plus className="mr-2 h-5 w-5" />
+              {t.create_first || "Create Your First Agent"}
             </Button>
           </CardContent>
         </Card>

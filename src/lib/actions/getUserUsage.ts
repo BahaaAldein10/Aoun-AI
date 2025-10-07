@@ -21,6 +21,9 @@ export type UserUsage = {
     facebook?: number;
     voice?: number;
   };
+  hasActiveSubscription: boolean;
+  isMaintenancePlan: boolean;
+  requiresUpgrade: boolean;
 };
 export type channelCounts = {
   website?: number;
@@ -49,11 +52,51 @@ export async function getUserUsage(userId: string): Promise<UserUsage | null> {
     // 1) Bot count
     const botCount = await prisma.bot.count({ where: { userId } });
 
-    // 2) Totals for month (use aggregatedUsage for fast reads)
-    const monthSums = await prisma.aggregatedUsage.aggregate({
+    // 2) Get active subscription (including grace period)
+    const subscription = await prisma.subscription.findFirst({
       where: {
         userId,
-        day: { gte: startOfMonthStr },
+        status: {
+          in: [
+            SubscriptionStatus.ACTIVE,
+            SubscriptionStatus.TRIALING,
+            SubscriptionStatus.PAST_DUE,
+          ],
+        },
+      },
+      include: { plan: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Determine subscription status and plan details
+    const hasActiveSubscription = !!subscription;
+    const planName = subscription?.plan?.name ?? null;
+    const isMaintenancePlan = planName === PlanName.MAINTENANCE;
+
+    // No defaults - if no subscription, they get 0
+    const monthlyQuota = subscription?.plan?.minutesPerMonth ?? 0;
+    const botLimit = subscription?.plan?.agents ?? 0;
+
+    // User needs upgrade if:
+    // - No subscription at all
+    // - Has MAINTENANCE plan (no usage allowed)
+    const requiresUpgrade = !hasActiveSubscription || isMaintenancePlan;
+
+    // 3) Calculate usage for current billing period
+    let periodStart = startOfMonth;
+    if (subscription?.currentPeriodStart) {
+      periodStart = subscription.currentPeriodStart;
+    } else if (subscription?.createdAt) {
+      periodStart = subscription.createdAt;
+    }
+
+    const periodStartStr = formatDay(periodStart);
+
+    // 4) Totals for current period (use aggregatedUsage for fast reads)
+    const periodSums = await prisma.aggregatedUsage.aggregate({
+      where: {
+        userId,
+        day: { gte: periodStartStr },
       },
       _sum: {
         interactions: true,
@@ -65,17 +108,17 @@ export async function getUserUsage(userId: string): Promise<UserUsage | null> {
       },
     });
 
-    const totalInteractions = monthSums._sum.interactions ?? 0;
-    const minutesUsed = monthSums._sum.minutes ?? 0;
+    const totalInteractions = periodSums._sum.interactions ?? 0;
+    const minutesUsed = periodSums._sum.minutes ?? 0;
 
     const channelCounts = {
-      website: monthSums._sum.website ?? 0,
-      whatsapp: monthSums._sum.whatsapp ?? 0,
-      facebook: monthSums._sum.facebook ?? 0,
-      voice: monthSums._sum.voice ?? 0,
+      website: periodSums._sum.website ?? 0,
+      whatsapp: periodSums._sum.whatsapp ?? 0,
+      facebook: periodSums._sum.facebook ?? 0,
+      voice: periodSums._sum.voice ?? 0,
     };
 
-    // 3) Interactions series for last 7 days (build zeroed map then fill)
+    // 5) Interactions series for last 7 days (build zeroed map then fill)
     const seriesMap: Record<string, number> = {};
     for (let i = 0; i < 7; i++) {
       const d = new Date(start7Days);
@@ -102,21 +145,7 @@ export async function getUserUsage(userId: string): Promise<UserUsage | null> {
       ([date, value]) => ({ date, value }),
     );
 
-    // 4) Subscription / plan info
-    const subscription = await prisma.subscription.findFirst({
-      where: {
-        userId,
-        status: SubscriptionStatus.ACTIVE,
-      },
-      include: { plan: true },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const planName = subscription?.plan?.name ?? PlanName.FREE;
-    const monthlyQuota = subscription?.plan?.minutesPerMonth ?? 0;
-    const botLimit = subscription?.plan?.agents ?? 1;
-
-    // 5) Response accuracy (last 7 days)
+    // 6) Response accuracy (last 7 days)
     const startDay = start7Days.toISOString().slice(0, 10);
     const endDay = now.toISOString().slice(0, 10);
     const accuracy = await getOverallAccuracy(userId, startDay, endDay);
@@ -128,12 +157,15 @@ export async function getUserUsage(userId: string): Promise<UserUsage | null> {
       totalInteractions,
       botCount,
       botLimit,
-      planName,
+      planName: planName ?? "NONE", // Explicitly show no plan
       minutesUsed,
       monthlyQuota,
       responseAccuracy,
       interactionsSeries,
       channelCounts,
+      hasActiveSubscription,
+      isMaintenancePlan,
+      requiresUpgrade,
     };
   } catch (error) {
     console.log("getUserUsage error:", error);

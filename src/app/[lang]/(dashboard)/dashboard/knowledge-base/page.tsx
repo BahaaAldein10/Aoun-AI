@@ -2,6 +2,7 @@ import KnowledgeBaseListClient from "@/components/dashboard/KnowledgeBaseListCli
 import { auth } from "@/lib/auth";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
+import { getAgentLimitInfo } from "@/lib/subscription/checkUsageLimits";
 import { redirect } from "next/navigation";
 
 type KnowledgeBaseListPageProps = {
@@ -20,11 +21,14 @@ const KnowledgeBaseListPage = async ({
     redirect(`/${lang}/auth/login`);
   }
 
-  // Get user's subscription to check limits
+  // Get agent limit info using subscription control
+  const agentLimitInfo = await getAgentLimitInfo(userId);
+
+  // Get user's subscription details
   const subscription = await prisma.subscription.findFirst({
     where: {
       userId,
-      status: { in: ["ACTIVE", "TRIALING"] },
+      status: { in: ["ACTIVE", "TRIALING", "PAST_DUE"] },
     },
     include: { plan: true },
     orderBy: { createdAt: "desc" },
@@ -35,10 +39,10 @@ const KnowledgeBaseListPage = async ({
     where: { userId },
     include: {
       documents: {
-        select: { id: true }, // Just count documents
+        select: { id: true },
       },
       embeddings: {
-        select: { id: true }, // Just count embeddings
+        select: { id: true },
       },
     },
     orderBy: { createdAt: "desc" },
@@ -49,18 +53,15 @@ const KnowledgeBaseListPage = async ({
     ...kb,
     documentCount: kb.documents.length,
     embeddingCount: kb.embeddings.length,
-    documents: undefined, // Remove the full documents array
-    embeddings: undefined, // Remove the full embeddings array
+    documents: undefined,
+    embeddings: undefined,
   }));
-
-  const allowedKnowledgeBases = subscription?.plan?.agents || 1; // Default to 1 if no subscription
-  const canCreateMore = kbsWithCounts.length < allowedKnowledgeBases;
 
   return (
     <KnowledgeBaseListClient
       knowledgeBases={kbsWithCounts}
       subscription={subscription}
-      canCreateMore={canCreateMore}
+      canCreateMore={agentLimitInfo.canCreateMore}
       lang={lang}
       dict={dict}
     />

@@ -3,7 +3,7 @@ import { getReportsData } from "@/lib/actions/getReportsData";
 import { auth } from "@/lib/auth";
 import { getLangAndDict, SupportedLang } from "@/lib/dictionaries";
 import { prisma } from "@/lib/prisma";
-import { SubscriptionStatus } from "@prisma/client";
+import { PlanName, SubscriptionStatus } from "@prisma/client";
 import { redirect } from "next/navigation";
 
 type ReportsPageProps = {
@@ -17,7 +17,7 @@ const ReportsPage = async ({ params }: ReportsPageProps) => {
   const userId = session?.user.id;
   if (!userId) return redirect(`/${lang}/auth/login`);
 
-  // Check if user has an active paid subscription
+  // Check if user has an active subscription with report access
   const subscription = await prisma.subscription.findFirst({
     where: {
       userId,
@@ -32,12 +32,22 @@ const ReportsPage = async ({ params }: ReportsPageProps) => {
     include: {
       plan: true,
     },
+    orderBy: {
+      createdAt: "desc",
+    },
   });
 
-  const hasPaidPlan = !!(subscription && subscription.plan.name !== "FREE");
+  // Determine if user has access to reports
+  // Reports are available for STARTER, PRO, and ENTERPRISE plans
+  // Not available for FREE and MAINTENANCE plans
+  const hasReportAccess = !!(
+    subscription &&
+    subscription.plan.name !== PlanName.FREE &&
+    subscription.plan.name !== PlanName.MAINTENANCE
+  );
 
-  // Get data only for paid users, provide empty data for free users
-  const data = hasPaidPlan
+  // Get data only for users with report access, provide empty data otherwise
+  const data = hasReportAccess
     ? await getReportsData(userId)
     : {
         monthlyData: [],
@@ -50,7 +60,7 @@ const ReportsPage = async ({ params }: ReportsPageProps) => {
       dict={dict}
       monthlyData={data.monthlyData}
       bots={data.bots}
-      hasPaidPlan={hasPaidPlan}
+      hasPaidPlan={hasReportAccess}
     />
   );
 };

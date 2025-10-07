@@ -9,10 +9,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { Channel, logInteraction } from "@/lib/analytics/logInteraction";
 import { createEmbeddings } from "@/lib/embedding-service";
 import { CacheService, checkRateLimit, createHash } from "@/lib/upstash";
+import { checkUsageLimits } from "@/lib/subscription/checkUsageLimits";
 
 const APP_SECRET = process.env.FACEBOOK_CLIENT_SECRET || undefined;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.CHAT_MODEL || "gpt-4o-mini";
+
+// Helper to estimate minutes from text
+function estimateMinutesFromText(text?: string | null, wpm = 200) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return 0;
+  return Math.max(1, Math.ceil(words / wpm));
+}
 
 // WhatsApp/Facebook (Messenger & Instagram) sending functions
 async function sendWhatsAppMessage(
@@ -119,17 +128,44 @@ async function sendInstagramMessage(
   }
 }
 
-// AI Response Generation with Caching
+// AI Response Generation with Caching and Subscription Control
 async function generateAIResponse(
   kbId: string,
   message: string,
   userId: string,
   botId: string,
   channel: Channel = "whatsapp",
-): Promise<{ response: string; sources: any[]; cached?: boolean }> {
+): Promise<{
+  response: string;
+  sources: any[];
+  cached?: boolean;
+  usageLimitExceeded?: boolean;
+}> {
   const cache = CacheService.getInstance();
 
   try {
+    // ========== SUBSCRIPTION & USAGE LIMIT CHECK ==========
+    const estimatedMinutes = estimateMinutesFromText(message);
+    const usageCheck = await checkUsageLimits(userId, estimatedMinutes);
+
+    if (!usageCheck.allowed) {
+      console.warn(
+        `Usage limit exceeded for user ${userId}: ${usageCheck.reason}`,
+      );
+
+      // Return a user-friendly message indicating limit reached
+      const limitMessage = usageCheck.requiresUpgrade
+        ? "You've reached your plan's usage limit. Please upgrade your subscription to continue using the service."
+        : "You've reached your monthly usage limit. Your limit will reset at the start of your next billing cycle.";
+
+      return {
+        response: limitMessage,
+        sources: [],
+        usageLimitExceeded: true,
+      };
+    }
+    // ========== END SUBSCRIPTION CHECK ==========
+
     // Check message-level cache first
     const messageHash = createHash(message);
     const cachedResponse = await cache.getChatResponse(kbId, messageHash);
@@ -153,7 +189,7 @@ async function generateAIResponse(
         botId: botId,
         channel: channel,
         interactions: 1,
-        minutes: 0,
+        minutes: estimatedMinutes,
         isCorrect,
         isNegative: !isCorrect,
         isFallback,
@@ -309,12 +345,14 @@ ${personality ? `Additional guidance: ${personality}` : ""}`.trim();
     const isCorrect =
       retrieved.length > 0 && assistantText.length > 10 && !isFallback;
 
+    const chatMinutes = estimateMinutesFromText(fullPrompt, 200);
+
     await logInteraction({
       userId: userId,
       botId: botId,
       channel: channel,
       interactions: 1,
-      minutes: 0,
+      minutes: chatMinutes,
       isCorrect,
       isNegative: !isCorrect,
       isFallback,
@@ -501,7 +539,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Enhanced POST with AI auto-reply, caching, and rate limiting
+// Enhanced POST with AI auto-reply, caching, subscription control, and rate limiting
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.arrayBuffer();
@@ -741,7 +779,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Generate AI response with caching
+    // Generate AI response with caching and subscription control
     if (
       kbId &&
       botId &&
@@ -750,13 +788,14 @@ export async function POST(req: NextRequest) {
       found
     ) {
       try {
-        const { response, cached } = await generateAIResponse(
-          kbId,
-          messageDetails.text,
-          found.userId,
-          botId,
-          channel,
-        );
+        const { response, cached, usageLimitExceeded } =
+          await generateAIResponse(
+            kbId,
+            messageDetails.text,
+            found.userId,
+            botId,
+            channel,
+          );
 
         const integ = await prisma.integration.findUnique({
           where: { id: found.integrationId },
@@ -812,7 +851,7 @@ export async function POST(req: NextRequest) {
 
         if (messageSent) {
           console.log(
-            `Auto-reply sent via ${found.provider} to ${messageDetails.senderId} (cached: ${cached})`,
+            `Auto-reply sent via ${found.provider} to ${messageDetails.senderId} (cached: ${cached}, limit exceeded: ${usageLimitExceeded || false})`,
           );
         }
       } catch (error) {
