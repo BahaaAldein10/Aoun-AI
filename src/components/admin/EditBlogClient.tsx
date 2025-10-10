@@ -33,24 +33,41 @@ import RichTextEditor from "../Editor/RichTextEditor";
 import { BlogPostWithAuthor } from "./BlogsColumns";
 
 function slugify(input: string) {
-  return (
-    input
-      .normalize("NFKD") // normalize for consistent matching
+  try {
+    return (
+      String(input || "")
+        .normalize?.("NFKD") // optional, safe-guard with optional chaining
+        .toLowerCase()
+        // remove Arabic diacritics (tashkīl) and Quranic marks
+        .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "")
+        // remove tatweel / kashida
+        .replace(/\u0640/g, "")
+        // remove any character that is NOT:
+        // - Arabic ranges (multiple blocks)
+        // - Latin letters A-Z
+        // - ASCII digits 0-9
+        // - spaces or hyphens
+        .replace(
+          /[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFFA-Za-z0-9\s-]/g,
+          "",
+        )
+        // convert Arabic-Indic digits to ASCII
+        .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+        // collapse whitespace/hyphens to single dash
+        .replace(/[\s-]+/g, "-")
+        // trim leading/trailing dashes
+        .replace(/^-+|-+$/g, "")
+    );
+  } catch (e) {
+    // Last-resort fallback: keep only ASCII letters/numbers/hyphen
+    console.error("slugify fallback:", e);
+    return String(input || "")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
       .toLowerCase()
-      // remove Arabic diacritics (tashkīl) and Quranic marks
-      .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "")
-      // remove tatweel / kashida
-      .replace(/\u0640/g, "")
-      // keep only: Arabic or Latin letters, numbers, spaces, and hyphens
-      .replace(/[^\p{Script=Arabic}\p{Script=Latin}\p{Number}\s-]/gu, "")
-      // convert Arabic-Indic digits to ASCII (optional but handy)
-      .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
-      .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
-      // collapse whitespace/hyphens to single dash
-      .replace(/[\s-]+/g, "-")
-      // trim leading/trailing dashes
-      .replace(/^-+|-+$/g, "")
-  );
+      .replace(/[\s_]+/g, "-");
+  }
 }
 
 export default function EditBlogClient({
