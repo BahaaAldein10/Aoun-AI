@@ -12,10 +12,12 @@ type PageProps = {
 
 export default async function AdminBlogEditPage({ params }: PageProps) {
   const { lang, dict } = await getLangAndDict(params);
-  const { slug } = await params;
+  const { slug: rawSlug } = await params;
+  const slug =
+    typeof rawSlug === "string" ? decodeURIComponent(rawSlug) : rawSlug;
 
   const session = await auth();
-  if (!session?.user.id || session.user.role !== UserRole.ADMIN)
+  if (!session?.user.id || session?.user.role !== UserRole.ADMIN)
     return redirect(`/${lang}`);
 
   const initialPost = (await getBlogPost({ lang, slug })) as BlogPostWithAuthor;

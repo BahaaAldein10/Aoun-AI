@@ -125,9 +125,9 @@ export default function EditBlogClient({
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">{t.create_title}</h1>
+            <h1 className="text-2xl font-bold">{t.update_title}</h1>
             <p className="text-muted-foreground mt-1 text-sm">
-              {t.create_description}
+              {t.update_description}
             </p>
           </div>
 

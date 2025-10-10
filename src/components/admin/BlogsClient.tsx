@@ -86,7 +86,7 @@ const BlogsClient = ({
   }
 
   function handleEdit(slug: string, lang: string) {
-    router.push(`/${lang}/admin/blog/edit/${slug}`);
+    router.push(`/${lang}/admin/blog/edit/${encodeURIComponent(slug)}`);
   }
 
   async function handleDelete(id: string) {
