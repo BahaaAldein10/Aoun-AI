@@ -37,14 +37,23 @@ const ReportsPage = async ({ params }: ReportsPageProps) => {
     },
   });
 
+  const isAdmin = await prisma.user
+    .findUnique({
+      where: { id: userId },
+      select: { role: true },
+    })
+    .then((user) => user?.role === "ADMIN")
+    .catch(() => false);
+
   // Determine if user has access to reports
   // Reports are available for STARTER, PRO, and ENTERPRISE plans
   // Not available for FREE and MAINTENANCE plans
-  const hasReportAccess = !!(
-    subscription &&
-    subscription.plan.name !== PlanName.FREE &&
-    subscription.plan.name !== PlanName.MAINTENANCE
-  );
+  const hasReportAccess =
+    !!(
+      subscription &&
+      subscription.plan.name !== PlanName.FREE &&
+      subscription.plan.name !== PlanName.MAINTENANCE
+    ) || isAdmin;
 
   // Get data only for users with report access, provide empty data otherwise
   const data = hasReportAccess

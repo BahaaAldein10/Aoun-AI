@@ -28,6 +28,41 @@ export async function checkUsageLimits(
   userId: string,
   estimatedMinutes: number = 1,
 ): Promise<UsageLimitResult> {
+  // Check if user is admin - admins bypass all limits
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+
+  if (user?.role === "ADMIN") {
+    // Calculate actual usage for admin (for tracking purposes)
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const usage = await prisma.usage.aggregate({
+      where: {
+        userId,
+        date: {
+          gte: startOfMonth,
+          lte: now,
+        },
+      },
+      _sum: {
+        minutes: true,
+      },
+    });
+
+    const usedMinutes = usage._sum.minutes || 0;
+
+    return {
+      allowed: true,
+      planName: PlanName.ENTERPRISE,
+      remainingMinutes: -1, // Unlimited
+      totalMinutes: -1,
+      usedMinutes: usedMinutes, // Actual usage tracked
+    };
+  }
+
   // 1. Get user's active subscription
   const subscription = await prisma.subscription.findFirst({
     where: {
@@ -173,6 +208,25 @@ export function getOverageRate(planName: PlanName): number {
 export async function checkAgentLimit(
   userId: string,
 ): Promise<AgentLimitResult> {
+  // Check if user is admin - admins bypass all limits
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+
+  if (user?.role === "ADMIN") {
+    const currentAgents = await prisma.knowledgeBase.count({
+      where: { userId },
+    });
+
+    return {
+      allowed: true,
+      limit: 999, // Virtually unlimited
+      current: currentAgents,
+      planName: PlanName.ENTERPRISE,
+    };
+  }
+
   const subscription = await prisma.subscription.findFirst({
     where: {
       userId,
