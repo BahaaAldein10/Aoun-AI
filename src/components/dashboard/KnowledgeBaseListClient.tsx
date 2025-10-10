@@ -11,15 +11,16 @@ import {
 } from "@/components/ui/card";
 import { Dictionary } from "@/contexts/dictionary-context";
 import { SupportedLang } from "@/lib/dictionaries";
-import { KnowledgeBase, Subscription, Plan } from "@prisma/client";
+import { KnowledgeBase, Plan, Subscription } from "@prisma/client";
 import {
+  AlertCircle,
+  Brain,
+  Calendar,
+  Database,
+  ExternalLink,
   FileText,
   Plus,
   Sprout,
-  Calendar,
-  Database,
-  Brain,
-  ExternalLink,
 } from "lucide-react";
 import Link from "next/link";
 import { KbMetadata } from "./KnowledgeBaseClient";
@@ -37,6 +38,7 @@ type KnowledgeBaseListClientProps = {
   knowledgeBases: KnowledgeBaseWithCounts[];
   subscription: SubscriptionWithPlan | null;
   canCreateMore: boolean;
+  maxAgents: number;
   lang: SupportedLang;
   dict: Dictionary;
 };
@@ -45,6 +47,7 @@ const KnowledgeBaseListClient = ({
   knowledgeBases,
   subscription,
   canCreateMore,
+  maxAgents,
   lang,
   dict,
 }: KnowledgeBaseListClientProps) => {
@@ -52,7 +55,10 @@ const KnowledgeBaseListClient = ({
   const locale = lang === "ar" ? "ar" : "en-US";
   const isRtl = lang === "ar";
 
-  const allowedKnowledgeBases = subscription?.plan?.agents || 1;
+  const currentCount = knowledgeBases.length;
+  const planName = subscription?.plan?.name || "NONE";
+  const hasNoSubscription = !subscription || maxAgents === 0;
+  const isAdmin = maxAgents === 999; // Admin users have 999 limit
 
   return (
     <div className="space-y-6">
@@ -69,11 +75,8 @@ const KnowledgeBaseListClient = ({
         <div className="flex flex-wrap gap-2">
           {canCreateMore ? (
             <Button
-              disabled={!canCreateMore}
               onClick={() => {
-                if (canCreateMore) {
-                  window.location.href = `/${lang}/dashboard/setup/new`;
-                }
+                window.location.href = `/${lang}/dashboard/setup/new`;
               }}
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -87,6 +90,32 @@ const KnowledgeBaseListClient = ({
           )}
         </div>
       </div>
+
+      {/* No Subscription Warning */}
+      {hasNoSubscription && !isAdmin && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>
+            {lang === "ar" ? "اشتراك مطلوب" : "Subscription Required"}
+          </AlertTitle>
+          <AlertDescription>
+            <div className="flex flex-col gap-3">
+              <p>
+                {lang === "ar"
+                  ? "يجب عليك الاشتراك في خطة للبدء في إنشاء قواعد المعرفة واستخدام المنصة."
+                  : "You need to subscribe to a plan to create knowledge bases and use the platform."}
+              </p>
+              <div>
+                <Button asChild>
+                  <Link href={`/${lang}/pricing`}>
+                    {lang === "ar" ? "عرض الخطط" : "View Plans"}
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Subscription Info */}
       <Card className={isRtl ? "rtl:text-right" : ""}>
@@ -106,7 +135,15 @@ const KnowledgeBaseListClient = ({
                 {t.plan_name || "Plan"}
               </div>
               <div className="font-medium">
-                {subscription?.plan?.name || "Free"}
+                {isAdmin ? (
+                  <span className="text-primary">ADMIN</span>
+                ) : planName === "NONE" ? (
+                  <span className="text-destructive">
+                    {lang === "en" ? "No Subscription" : "لا يوجد اشتراك"}
+                  </span>
+                ) : (
+                  planName
+                )}
               </div>
             </div>
 
@@ -115,7 +152,7 @@ const KnowledgeBaseListClient = ({
                 {t.knowledge_bases_used || "Knowledge Bases"}
               </div>
               <div className="font-medium">
-                {knowledgeBases.length} / {allowedKnowledgeBases}
+                {currentCount} / {maxAgents === 999 ? "∞" : maxAgents}
               </div>
             </div>
 
@@ -131,15 +168,27 @@ const KnowledgeBaseListClient = ({
             )}
           </div>
 
-          {!canCreateMore && (
+          {/* Limit Reached Alert */}
+          {!canCreateMore && !hasNoSubscription && !isAdmin && (
             <Alert className="mt-4">
               <FileText className="h-4 w-4" />
               <AlertTitle>
                 {t.limit_reached_title || "Limit Reached"}
               </AlertTitle>
               <AlertDescription>
-                {t.limit_reached_desc ||
-                  "You've reached your knowledge base limit. Upgrade your plan to create more."}
+                <div className="flex flex-col gap-3">
+                  <p>
+                    {t.limit_reached_desc ||
+                      `You've reached your knowledge base limit (${currentCount}/${maxAgents}). Upgrade your plan to create more.`}
+                  </p>
+                  <div>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/${lang}/pricing`}>
+                        {lang === "ar" ? "ترقية الخطة" : "Upgrade Plan"}
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
               </AlertDescription>
             </Alert>
           )}
@@ -160,12 +209,26 @@ const KnowledgeBaseListClient = ({
                   "You haven't created any knowledge bases yet. Create your first one to get started."}
               </p>
               <div className="flex gap-2">
-                <Button asChild>
-                  <Link href={`/${lang}/dashboard/setup/new`}>
-                    <Plus className="mr-2 h-4 w-4" />
-                    {t.create_first_kb || "Create Your First Knowledge Base"}
-                  </Link>
-                </Button>
+                {canCreateMore ? (
+                  <Button asChild>
+                    <Link href={`/${lang}/dashboard/setup/new`}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      {t.create_first_kb || "Create Your First Knowledge Base"}
+                    </Link>
+                  </Button>
+                ) : hasNoSubscription ? (
+                  <Button asChild>
+                    <Link href={`/${lang}/pricing`}>
+                      {lang === "ar" ? "الاشتراك الآن" : "Subscribe Now"}
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button asChild variant="outline">
+                    <Link href={`/${lang}/pricing`}>
+                      {lang === "ar" ? "ترقية الخطة" : "Upgrade Plan"}
+                    </Link>
+                  </Button>
+                )}
               </div>
             </div>
           </AlertDescription>

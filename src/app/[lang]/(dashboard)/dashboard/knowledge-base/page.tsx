@@ -62,6 +62,7 @@ const KnowledgeBaseListPage = async ({
       knowledgeBases={kbsWithCounts}
       subscription={subscription}
       canCreateMore={agentLimitInfo.canCreateMore}
+      maxAgents={agentLimitInfo.limit}
       lang={lang}
       dict={dict}
     />
